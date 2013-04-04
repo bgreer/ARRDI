@@ -402,116 +402,104 @@ Contains
   End Subroutine Get_Atranspose_Info
 
 
-  Subroutine Build_Region(region_id)
-	Implicit None
-	integer*8 :: region_id, i, cct, tsize_pix, delta_pix, ndtemp
-	Real*8 :: tsize_deg, apod_factor
-	Character*50 :: rstring, tstring
-	Character*120 :: parfile, dfile
-	! for now, everyone reads in the same files
-	! these filenames should depend on the region id, however
-         Write(rstring,'(i10)')region_id
+	SUBROUTINE Build_Region(region_id)
+		IMPLICIT NONE
+		INTEGER*8 :: region_id, i, cct, tsize_pix, delta_pix, ndtemp
+		REAL*8 :: tsize_deg, apod_factor
+		CHARACTER*50 :: rstring, tstring
+		CHARACTER*120 :: parfile, dfile
+		! for now, everyone reads in the same files
+		! these filenames should depend on the region id, however
+		WRITE(rstring,'(i10)')region_id
 
-	cct = 0
-	atax(:,:) = 0.0
-	rhs_x(:) = 0.0
-	atay(:,:)= 0.0
-	rhs_y(:) = 0.0
-	erhx = 0.0
-	erhxc = 0.0
-	erhy = 0.0
-	erhyc = 0.0
-	! Here we go ahead and get the total number of measurements
-!	If(Allocated(nmeasurements)) Then DeAllocate(nmeasurements)
-!	Allocate(nmeasurements
-	nmeasurements = 0
-	do i = 1, ntsizes
-		tsize_pix = tsizes(i)
-	        Write(tstring,'(i10)')tsize_pix
-                dfile = 'input/ex_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-		open (unit = 10, file = dfile)
-		READ(10,'(I7)')ndtemp	
-		Close(10)
-		nmeasurements = nmeasurements+ndtemp
-		
-	enddo
-!	write(6,*)'nmeasurements', nmeasurements
-	Call Get_Atranspose_Info()
-	next_big_column = 1
-	next_local_column = 1
-!	stop
-	do i = 1, ntsizes
-	  tsize_pix = tsizes(i)
-	  tsize_deg = tsize_pix/8.0
-	  	! this bit is still coded assuming that nxk is 17 - make this arbitrary too
-		! some pseudo code
-		! delta_pix = (nxk-int(tsize_deg*apod_factor/dlonlat)-1)/2  ! split the difference
-		! i_min = 1+delta_pix
-		! i_max = nxk-delta_pix
-		If ( tsize_pix .eq. 128) Then
-		  i_min = 1
-		  j_min = 1
-		  i_max = 17
-		  j_max = 17
-		Endif
-		If (tsize_pix .eq. 32) Then
-		  i_min = 7-cct
-		  j_min = 7-cct
-		  i_max = 11+cct
-		  j_max = 11+cct                  
-		endif
-		If (tsize_pix .eq. 16) Then
-		  i_min = 8-cct
-		  j_min = 8-cct
-		  i_max = 10+cct
-		  j_max = 10+cct
-		Endif
-		apod_factor = 7.5/8.0
-		 delta_pix = (nxk-int(tsize_deg*apod_factor/dlonlat)-1)/2  ! split the difference
-		i_min = 1+delta_pix
-		i_max = nxk-delta_pix
-		j_min = i_min
-		j_max = i_max
-!		write(6,*)'i_min', i_min, tsize_pix
-		Call Load_Kernels(tsize_pix)
-		smeared_kers = smeared_kers*dlonlat*dlonlat
-		Call Load_Dataset(region_id,tsize_pix)		
+		cct = 0
+		atax(:,:) = 0.0
+		rhs_x(:) = 0.0
+		atay(:,:)= 0.0
+		rhs_y(:) = 0.0
+		erhx = 0.0
+		erhxc = 0.0
+		erhy = 0.0
+		erhyc = 0.0
+		! Here we go ahead and get the total number of measurements
+		!	If(Allocated(nmeasurements)) Then DeAllocate(nmeasurements)
+		!	Allocate(nmeasurements
+		nmeasurements = 0
+		DO i = 1, ntsizes
+			tsize_pix = tsizes(i)
+	        WRITE(tstring,'(i10)')tsize_pix
+			dfile = 'input/ex_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+			OPEN(10, FILE=dfile)
+			READ(10,'(I7)')ndtemp	
+			CLOSE(10)
+			nmeasurements = nmeasurements+ndtemp
+		ENDDO
+		!	write(6,*)'nmeasurements', nmeasurements
+		CALL Get_Atranspose_Info()
+		next_big_column = 1
+		next_local_column = 1
+		DO i = 1, ntsizes
+			tsize_pix = tsizes(i)
+			tsize_deg = tsize_pix/8.0
+		  	! this bit is still coded assuming that nxk is 17 - make this arbitrary too
+			! some pseudo code
+			! delta_pix = (nxk-int(tsize_deg*apod_factor/dlonlat)-1)/2  ! split the difference
+			! i_min = 1+delta_pix
+			! i_max = nxk-delta_pix
+			IF ( tsize_pix == 128) THEN
+				i_min = 1
+				j_min = 1
+				i_max = 17
+				j_max = 17
+			ENDIF
+			IF (tsize_pix == 32) THEN
+				i_min = 7-cct
+				j_min = 7-cct
+				i_max = 11+cct
+				j_max = 11+cct                  
+			ENDIF
+			IF (tsize_pix == 16) THEN
+				i_min = 8-cct
+				j_min = 8-cct
+				i_max = 10+cct
+				j_max = 10+cct
+			ENDIF
+			apod_factor = 7.5/8.0
+			delta_pix = (nxk-int(tsize_deg*apod_factor/dlonlat)-1)/2  ! split the difference
+			i_min = 1+delta_pix
+			i_max = nxk-delta_pix
+			j_min = i_min
+			j_max = i_max
+			CALL Load_Kernels(tsize_pix)
+			smeared_kers = smeared_kers*dlonlat*dlonlat
+			CALL Load_Dataset(region_id,tsize_pix)		
 
-		Call Create_Nonzero_Table()  ! more bookeeping for parallel build of matrix
-		Call Augment_A_Parallel()   ! load the A_transpose#A and A_tranpose#data for each tilesize
+			CALL Create_Nonzero_Table()  ! more bookeeping for parallel build of matrix
+			CALL Augment_A_Parallel()   ! load the A_transpose#A and A_tranpose#data for each tilesize
 
+			DEALLOCATE(uxy)
+			DEALLOCATE(n)
+			DEALLOCATE(ki)
+			DEALLOCATE(kxy)
+			DEALLOCATE(indic)
+			DEALLOCATE(indicn)
+			DEALLOCATE(nktindex)
+			DEALLOCATE(ata_indices)
+			DEALLOCATE(ata_num)
+		ENDDO
+		erhx = erhx/erhxc
+		erhx = sqrt(1.0/erhx)
+		erhy = erhy/erhyc
+		erhy = sqrt(1.0/erhy)
 
-		DeAllocate(uxy)
-		DeAllocate(n)
-		DeAllocate(ki)
-		DeAllocate(kxy)
-		DeAllocate(indic)
-		DeAllocate(indicn)
-		DeAllocate(nktindex)
-		DeAllocate(ata_indices)
-		DeAllocate(ata_num)
-
-!		Write(6,*)'deallocated'
-!		Write(6,*)'next_big_column is ', next_big_column, nmeasurements
-!		Write(6,*)'next_local_column is ', next_local_column
-	enddo
-!	Write(6,*)'FF next_big_column is ', next_big_column, nmeasurements
-!	Write(6,*)'FF next_local_column is ', next_local_column
-!	write(6,*)'erhx ', erhx
-	erhx = erhx/erhxc
-	erhx = sqrt(1.0/erhx)
-	erhy = erhy/erhyc
-	erhy = sqrt(1.0/erhy)
-
-	write(6,*)'erhx is :', erhx, erhy
-	atax = atax*(erhx*erhx) ! +regm    - regularization is now done in pinv()
-	atay = atay*(erhy*erhy) ! +regm
-	atransposex = atransposex*(erhx*erhx)
-	atransposey = atransposey*(erhy*erhy)
-	rhs_x = rhs_x*(erhx*erhx)
-	rhs_y = rhs_y*(erhy*erhy)	
-	
-  End Subroutine Build_Region
+		IF (myid == 0) WRITE(*,'(A,F8.3,A,F8.3)')' Error Harm. Mean is :', erhx, ', ', erhy
+		atax = atax*(erhx*erhx) ! +regm    - regularization is now done in pinv()
+		atay = atay*(erhy*erhy) ! +regm
+		atransposex = atransposex*(erhx*erhx)
+		atransposey = atransposey*(erhy*erhy)
+		rhs_x = rhs_x*(erhx*erhx)
+		rhs_y = rhs_y*(erhy*erhy)	
+	END SUBROUTINE Build_Region
 
   Subroutine Create_Nonzero_Table()
 
@@ -1168,7 +1156,6 @@ Subroutine Compute_Regularization_Matrices
 !			lv2 = 13D0 * lv / (zs(iz) + 4D0)**2D0
 			lv2 = lv*exp(-zs(iz)*0.10)
 !			lv2 = lv
-			PRINT*, iz, zs(iz), lv2
 			do iy = 1, nysz(iz)
 				do ix = 1, nxsz(iz)
 !					Lz(i,ile) = 1.0/delz
@@ -1443,43 +1430,6 @@ SUBROUTINE IncrementRegm(ind1, ind2, val)
 		regm(rowmap(ind1),colmap(ind2)) = regm(rowmap(ind1),colmap(ind2))+val
 	ENDIF
 END SUBROUTINE IncrementRegm
-
-
-Subroutine sinv()
-	! serial inversion
-	Implicit None
-	Real*8, Allocatable :: BigA(:,:), BigB(:), the_answer(:)
-	Real*8 :: work(1:nsolution)
-	Integer :: ipiv(1:nsolution), info, lwork
-	allocate(bigb(1:nsolution))
-	allocate(biga(1:nsolution,1:nsolution))	
-	allocate(the_answer(1:nsolution))
-	the_answer(:) = 0.0D0
-	lwork = nsolution
-	If (inv_dir .eq. 1) Then
-		! x direction
-		biga(:,:) = atax
-		bigb(:) = rhs_x
-        Endif
-	If (inv_dir .eq. 2) Then
-		! y direction
-		biga(:,:) = atay
-		bigb(:) = rhs_y
-        Endif
-	! First, we have to LU decompose the matrix
-	call dgetrf(nsolution,nsolution,biga,nsolution,ipiv,info)
-	Write(6,*)'factor info is ', info
-	! Next we get the inverse 
-	call dgetri(nsolution,biga,nsolution,ipiv,work,lwork,info)
-	Write(6,*)'inversion info is ', info
-	!Finally, compute the answer
-
-	call dgemv( 'N', nsolution, nsolution, 1.0, biga, nsolution, bigb, 1, 0.0, the_answer, 1 )
-	write(6,*)'answer check ', the_answer(1:10)
-	DeAllocate(the_answer)
-	DeAllocate(BigA)
-	DeAllocate(BigB)
-End Subroutine sinv
 
 
 
