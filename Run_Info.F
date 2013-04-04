@@ -1,10 +1,11 @@
-Module Run_Info
-  Implicit None
-  Real*8, Public :: erhx, erhy, erhxc, erhyc, forward_weight
-  Real*8, Allocatable, Public :: rhs_x(:), rhs_y(:)
-  Real*8, Allocatable, Public :: atax(:,:), atay(:,:), regm(:,:), ataxt(:,:), atayt(:,:), ataxm(:,:), ataym(:,:)
-  Real*8, Allocatable, Public :: ataxmt(:,:), ataymt(:,:), rhsxy(:,:), rhsxyt(:,:),rhsxyzero(:,:,:), rhsxyiter(:,:,:)
-  Real*8, Allocatable, Public :: L(:,:), Lx(:,:), Ly(:,:), Lz(:,:)
+MODULE Run_Info
+	IMPLICIT NONE
+	INCLUDE "mpif.h"
+	REAL*8, PUBLIC :: erhx, erhy, erhxc, erhyc, forward_weight
+	REAL*8, ALLOCATABLE, PUBLIC :: rhs_x(:), rhs_y(:)
+	REAL*8, ALLOCATABLE, PUBLIC :: atax(:,:), atay(:,:), regm(:,:), ataxt(:,:), atayt(:,:), ataxm(:,:), ataym(:,:)
+	REAL*8, ALLOCATABLE, PUBLIC :: ataxmt(:,:), ataymt(:,:), rhsxy(:,:), rhsxyt(:,:),rhsxyzero(:,:,:), rhsxyiter(:,:,:)
+	REAL*8, ALLOCATABLE, PUBLIC :: L(:,:), Lx(:,:), Ly(:,:), Lz(:,:)
 
   Integer*8, Public :: n_lons, n_lats
   Integer*8, Public :: i_min, i_max, j_min, j_max
@@ -16,6 +17,11 @@ Module Run_Info
   Logical, Public :: Propagate_Errors = .True.
   Logical, Public :: compute_coarse_kernels = .False.
   Logical, Public :: compute_avg_kernels = .True.
-	Logical, Public :: onesided_boundary_stitching = .True.
+  Logical, Public :: onesided_boundary_stitching = .True.
 
-End Module Run_Info
+	! MPI stuff
+	INTEGER, PUBLIC :: myid, numproc
+	! myid is the MPI process ID, iam is the BLACS process ID. they are probably
+	! the same
+
+END MODULE Run_Info
