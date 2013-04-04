@@ -21,138 +21,100 @@ Module Data_Management
 	Real*8, Allocatable, Public :: uxy(:,:)
 	real*8, Allocatable :: lon(:), lat(:)
 	Real*8, Public :: lh, lv, deltalv, deltalh, sigma, lat_lims0(2), lon_lims0(2), max_tile_size, tsize_deg
-    	Namelist /Input_Namelist/ nprow, npcol, x_block_size, y_block_size, x_block_size_a,n_regions, &
+    	Namelist /Input_Namelist/ x_block_size, y_block_size, x_block_size_a,n_regions, &
 		kernel_set, ntsizes, lh, lv, deltalv, deltalh, sigma, dlonlat, grid_scheme, tile_sizes, max_iter, &
 		stitch_boundaries_only, stitch_regions, propagate_errors, compute_avg_kernels, &
-		compute_coarse_kernels, forward_weight, onesided_boundary_stitching
-  Contains
-  Subroutine Main_Initialization()
-	Implicit None
-!	Write(6,*)'1'
-	! 1.  Gather the inversion parameters
-	Call Read_Run_Info()
-	! 2. Initialize the kernels  - need kernel parameters to set and validate the solution grid
-!	Write(6,*)'2'
-	Call Initialize_Kernels()	
+		compute_coarse_kernels, forward_weight, onesided_boundary_stitching, &
+		grid_file
 
- 	! 3.  Get the basic solution grid
-!	write(6,*)'3'
-	Call Get_Solution_Grid(lon_lims0, lat_lims0,max_tile_size)
-
-	Call Pack_Grid()
-
-	If (n_regions .gt. 1) Then
-	! 4. Of the different regions, figure out which ones overlap
-		call Identify_Neighbors(lon_lims0,lat_lims0)
-	        call find_overlap(lon_lims0,lat_lims0)
-	Endif
-  End Subroutine Main_Initialization
-  
-  Subroutine Read_Run_Info()
-	Implicit None
-  	Character*120 :: run_file, region_file
-	Integer*8 :: i, mxts = 20
-	Logical :: verify_params = .false.
-	! Initialize lh, lv, lsigma, n_regions
-	! then read the latitude and longitude limits
-	Allocate(tile_sizes(1:mxts))
-	run_file = 'input/controls'
-	run_file = 'input/main_input'
-        region_file = 'input/region_limits'
-	Open(unit = 10, file = run_file)
-	Read(10, nml = Input_Namelist)
-!	READ(10,'(I7)')n_regions
-!	Read(10,'(I7)')grid_scheme
-!	Read(10,'(I7)')kernel_set
-!	Read(10,'(I7)')ntsizes
-
-	Allocate(tsizes(ntsizes))	
-	tsizes(1:ntsizes) = tile_sizes(1:ntsizes)
-	DeAllocate(tile_sizes)
-!	do i = 1, ntsizes
-!		Read(10,'(I7)')tsizes(i)
-!	enddo
-!        READ(10,'(E12.4)')lh
-!        READ(10,'(E12.4)')lv
-!        READ(10,'(E12.4)')sigma	
-!	READ(10,'(E12.4)')dlonlat
-	Close(unit = 10)
-	max_tile_size = maxval(tsizes)/8.0
-	If (verify_params == .True.) then
-	Write(6,*)'xblock_size_a = ', x_block_size_a
-	Write(6,*)'xblock_size   = ', x_block_size
-	Write(6,*)'yblock_size   = ', y_block_size
-	Write(6,*)'nprow         = ', nprow
-	Write(6,*)'npcol         = ', npcol
-	Write(6,*)'n_regions     = ', n_regions
-	Write(6,*)'grid_scheme   = ', grid_scheme
-	Write(6,*)'kernel_set    = ', kernel_set
-	Write(6,*)'ntsizes       = ', ntsizes
-	Write(6,*)'tsizes        = ', tsizes
-	Write(6,*)'lh            = ', lh
-	Write(6,*)'lv            = ', lv
-	Write(6,*)'deltalv       = ', deltalv
-	Write(6,*)'deltalh       = ', deltalh
-	Write(6,*)'sigma         = ', sigma
-	Write(6,*)'dlonlat       = ', dlonlat
-	endif
-
-	! stop
-	Allocate(lat_lims(2,n_regions))
-	Allocate(lon_lims(2,n_regions))
-
-	Open(unit = 10, file = region_file)
-	Do i = 1, n_regions
-		Read(10,'(E12.4)')lon_lims(1,i)
-		Read(10,'(E12.4)')lon_lims(2,i)
-		Read(10,'(E12.4)')lat_lims(1,i)
-		Read(10,'(E12.4)')lat_lims(2,i)
-!		Write(6,*)lon_lims(:,i)
-!		Write(6,*)lat_lims(:,i)
-	Enddo
-	Close(unit = 10)
-	lat_lims0(:) = lat_lims(:,1)
-	lon_lims0(:) = lon_lims(:,1)
-  End Subroutine Read_Run_Info
+	CONTAINS
 	
-  Subroutine Load_Dataset(region_id,tile_size_id)
-	Implicit None
-	Integer*8 :: region_id, tile_size_id
-	Character*50 :: rstring, tstring
-	Character*120 :: status_message
+	SUBROUTINE Main_Initialization()
+		IMPLICIT NONE
+		! 1.  Gather the inversion parameters
+		CALL Read_Run_Info()
+		! 2. Initialize the kernels  - need kernel parameters to set and validate the solution grid
+		CALL Initialize_Kernels()	
+ 		! 3.  Get the basic solution grid
+		CALL Get_Solution_Grid(lon_lims0, lat_lims0, max_tile_size)
 
-	! The indice building routines need to know the 
-	! solution grid for this region
+		CALL Pack_Grid()
 
-	lats_pack(:) = lats_pack(:)+lat_lims(1,region_id+1)-lat_lims0(1)
-	lats(:,:) = lats(:,:)+lat_lims(1,region_id+1)-lat_lims0(1)
-	lons_pack(:) = lons_pack(:)+lon_lims(1,region_id+1)-lon_lims0(1)
-	lons(:,:) = lons(:,:)+lon_lims(1,region_id+1)-lon_lims0(1)
-	Call Read_Raw_Data(region_id,tile_size_id)
-	!	Write(6,*)'------------'
+		IF (n_regions > 1) THEN
+			! 4. Of the different regions, figure out which ones overlap
+			CALL Identify_Neighbors(lon_lims0,lat_lims0)
+			CALL find_overlap(lon_lims0,lat_lims0)
+		ENDIF
+	END SUBROUTINE Main_Initialization
+ 
+	! Reads run parameters from namelist
+	! path is hard-coded
+	SUBROUTINE Read_Run_Info()
+		IMPLICIT NONE
+		CHARACTER*120 :: run_file, region_file
+		INTEGER*8 :: i, mxts = 20
+		! Initialize lh, lv, lsigma, n_regions
+		! then read the latitude and longitude limits
+		ALLOCATE(tile_sizes(1:mxts))
+		run_file = 'input/main_input'
+		region_file = 'input/region_limits'
+		OPEN(10, FILE=run_file)
+		READ(10, NML=Input_Namelist)
 
-	tsize_deg = tile_size_id/8.0
-	Call Build_Indices()
-	Call Build_Shift()
-	Call Generate_ATA_Indices()
-        Write(rstring,'(i10)')region_id
-	Write(tstring,'(i10)')tile_size_id
+		ALLOCATE(tsizes(ntsizes))	
+		tsizes(1:ntsizes) = tile_sizes(1:ntsizes)
+		DEALLOCATE(tile_sizes)
+		CLOSE(10)
+		max_tile_size = maxval(tsizes)/8.0
 
-	! Revert in case we need to load another region
-	lats_pack(:) = lats_pack(:)-lat_lims(1,region_id+1)+lat_lims0(1)
-	lats(:,:) = lats(:,:)-lat_lims(1,region_id+1)+lat_lims0(1)
-	lons_pack(:) = lons_pack(:)-lon_lims(1,region_id+1)+lon_lims0(1)
-	lons(:,:) = lons(:,:)-lon_lims(1,region_id+1)+lon_lims0(1)
+		ALLOCATE(lat_lims(2,n_regions))
+		ALLOCATE(lon_lims(2,n_regions))
 
-	DeAllocate(nvals)
-	DeAllocate(kvals)
-	DeAllocate(latvals)
-	DeAllocate(lonvals)
-	DeAllocate(lon)
-	DeAllocate(lat)	
-	status_message = 'Data from region '//TRIM(ADJUSTL(rstring))//' for tilesize '//TRIM(ADJUSTL(tstring))//' is loaded.'
-	Write(6,*)status_message, ndata
-  End Subroutine Load_Dataset
+		OPEN(10, FILE=region_file)
+		DO i = 1, n_regions
+			READ(10,'(E12.4)')lon_lims(1,i)
+			READ(10,'(E12.4)')lon_lims(2,i)
+			READ(10,'(E12.4)')lat_lims(1,i)
+			READ(10,'(E12.4)')lat_lims(2,i)
+		ENDDO
+		CLOSE(10)
+		lat_lims0(:) = lat_lims(:,1)
+		lon_lims0(:) = lon_lims(:,1)
+	END SUBROUTINE Read_Run_Info
+	
+	SUBROUTINE Load_Dataset(region_id,tile_size_id)
+		IMPLICIT NONE
+		INTEGER*8 :: region_id, tile_size_id
+
+		! The indice building routines need to know the 
+		! solution grid for this region
+
+		lats_pack(:) = lats_pack(:)+lat_lims(1,region_id+1)-lat_lims0(1)
+		lats(:,:) = lats(:,:)+lat_lims(1,region_id+1)-lat_lims0(1)
+		lons_pack(:) = lons_pack(:)+lon_lims(1,region_id+1)-lon_lims0(1)
+		lons(:,:) = lons(:,:)+lon_lims(1,region_id+1)-lon_lims0(1)
+		CALL Read_Raw_Data(region_id,tile_size_id)
+
+		tsize_deg = tile_size_id/8.0
+		CALL Build_Indices()
+		CALL Build_Shift()
+		CALL Generate_ATA_Indices()
+
+		! Revert in case we need to load another region
+		lats_pack(:) = lats_pack(:)-lat_lims(1,region_id+1)+lat_lims0(1)
+		lats(:,:) = lats(:,:)-lat_lims(1,region_id+1)+lat_lims0(1)
+		lons_pack(:) = lons_pack(:)-lon_lims(1,region_id+1)+lon_lims0(1)
+		lons(:,:) = lons(:,:)-lon_lims(1,region_id+1)+lon_lims0(1)
+
+		DEALLOCATE(nvals)
+		DEALLOCATE(kvals)
+		DEALLOCATE(latvals)
+		DEALLOCATE(lonvals)
+		DEALLOCATE(lon)
+		DEALLOCATE(lat)	
+		IF (myid == 0) WRITE(*,'(A,I3,A,I4,A,I8,A)')" Data from region ",region_id," for tilesize ",tile_size_id,&
+			" is loaded (ndata=", ndata, ")."
+	END SUBROUTINE Load_Dataset
   
   Subroutine Read_Raw_Data(r_id,t_id)
 	Implicit None
