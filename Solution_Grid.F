@@ -1,5 +1,6 @@
 Module Solution_Grid
-	Use Kernel_Management
+	USE Kernel_Management
+	USE Run_Info
 	! This module contains global variables and subroutines related
 	! to the setup of the solution (i.e. inversion) grid.
 	! Contains Subroutines
@@ -23,11 +24,9 @@ Module Solution_Grid
 	Real*8, Allocatable :: deltax(:), deltay(:)
 	Real*8, Public :: dlonlat
 	Integer*8, Public :: grid_scheme
+	Character(LEN=300), Public :: grid_file
 	Integer*8, Allocatable :: ind_arro(:,:,:,:), num_arro(:,:,:), ind_arr(:,:,:,:), num_arr(:,:,:)
 contains
-	subroutine test_routine()
-		Write(6,*)'I compiled'
-	end subroutine test_routine
 	Subroutine Get_Solution_Grid(lon_lims,lat_lims,max_tile_size)
 	        Implicit None
 	        Real*8 :: dlon, dlat, lat_lims(2), lon_lims(2)
@@ -38,7 +37,13 @@ contains
 		Integer*8 :: i,j
 		dlon = dlonlat
 		dlat = dlonlat
-		Call Pick_Grid_Scheme()
+
+		! Use negative grid_scheme to use grid_file
+		IF (grid_scheme < 0) THEN
+			CALL Read_Grid_Scheme()
+		ELSE
+			Call Pick_Grid_Scheme()
+		ENDIF
 		
 		apod_factor = 7.5/8.0
 		max_tile_size_pix = int(max_tile_size/dlonlat*apod_factor)
@@ -136,7 +141,10 @@ contains
 	Do i = 1, nzs
 		nsolution = nsolution+nxsz(i)*nysz(i)
 	EndDo
-	write(6,*)'Matrix is NxN with N = ', nsolution
+	IF (myid == 0) THEN
+		WRITE(*,'(A,I9)') ' Matrix is NxN with N = ', nsolution
+		WRITE(*,'(A,F7.2,A)') ' Approximate memory usage = ', DBLE(nsolution*nsolution)*16D0/1024D0/1024D0/1024D0,' GB'
+	ENDIF
 	Allocate(base_lat(nys0))
 	Allocate(base_lon(nxs0))
 	base_lat(:) = lats(:,1)
@@ -300,6 +308,71 @@ contains
 		! weight_arr, ind_arr, and num_arr have been checked against IDL's output and are correct.
 	End Subroutine Generate_Weight_Arrays
 
+	! Read in a grid file
+	! should have the same result as calling Pick_Grid_Scheme
+	! Added 04/2013 bgreer
+	SUBROUTINE Read_Grid_Scheme()
+		IMPLICIT NONE
+		INTEGER :: stat, res, ii, ierr
+		REAL :: depth
+		
+		! If you are proc 0, do the reading
+		IF (myid == 0) THEN
+			! First, count the number of depths
+			OPEN(20, FILE=grid_file, ACTION='READ')
+			stat = 0
+			nzs = 0
+			DO WHILE (stat == 0)
+				READ(20,*,IOSTAT=stat) depth, res
+				nzs = nzs + 1
+			ENDDO
+			CLOSE(20)
+			nzs = nzs - 1
+			
+			! Make sure the number is sane
+			IF (nzs <= 2 .OR. nzs > 500) THEN
+				WRITE(*,'(A,I)') "GRID ERROR: Improper number of depths in grid file: ", nzs
+				STOP
+			ENDIF
+			
+			! Allocate space for grid info
+			ALLOCATE(zs(nzs))
+			ALLOCATE(deg_factor(nzs))
+			
+			! Go back and read in info
+			OPEN(20, FILE=grid_file, ACTION='READ')
+			DO ii=1,nzs
+				READ(20,*) depth, res
+				zs(ii) = depth
+				deg_factor(ii) = res
+			ENDDO
+			CLOSE(20)
+			
+			! Check the values
+			! First depth must be res = 1
+			IF (deg_factor(1) /= 1) THEN
+				WRITE(*,'(A)') "GRID ERROR: First depth in grid must have &
+				resolution = 1"
+				STOP
+			ENDIF
+			! Any other constraints?..
+		ENDIF
+
+		! After proc 0 is done, broadcast info to other procs
+		CALL MPI_Barrier(MPI_COMM_WORLD, ierr)
+		CALL MPI_Bcast(nzs, 1, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+		IF (myid /= 0) THEN
+			ALLOCATE(zs(nzs))
+			ALLOCATE(deg_factor(nzs))
+		ENDIF
+		CALL MPI_Bcast(zs, nzs, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+		CALL MPI_Bcast(deg_factor, nzs, MPI_INTEGER, 0, MPI_COMM_WORLD, ierr)
+
+		IF (myid == 0) &
+			WRITE(*,'(A,I)') " Grid has been read in, total depths = ", nzs
+
+	END SUBROUTINE Read_Grid_Scheme
+
 
 	Subroutine Pick_Grid_Scheme()
 		Implicit None
@@ -426,30 +499,6 @@ contains
 			   deg_factor(1:8) = 1
 			   deg_factor(9:14) = 2
 			   deg_factor(15:24) = 4
-				case (4000)
-			   write(6,*)'using grid scheme 4000 - 421 cut off at 10Mm'
-			   nzs = 17
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 0.15 
-	                   zs(3) = 0.25 
-	                   zs(4) = 0.5 
-	                   zs(5) = 0.75 
-	                   zs(6) = 1.0 
-	                   zs(7) = 1.25
-	                   zs(8) = 1.5
-	                   zs(9) = 2.0 
-	                   zs(10) = 3.0 
-	                   zs(11) = 4.0 
-	                   zs(12) = 5.0 
-	                   zs(13) = 6.0 
-	                   zs(14) = 7.0 
-	                   zs(15) = 8.0
-					   zs(16) = 9.0
-	                   zs(17) = 10.0 
-			   deg_factor(1:11) = 1
-			   deg_factor(12:17) = 2
 				case (9999)
 			   write(6,*)'using grid scheme 9999 i give up describing these'
 			   nzs = 29
@@ -543,120 +592,6 @@ contains
 			   deg_factor(1:1) = 1
 			   deg_factor(2:2) = 2
 			   deg_factor(3:48) = 4
-				case (9997)
-			   write(6,*)'using grid scheme 9997 i give up describing these'
-			   nzs = 43
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-					   zs(2) = 0.15
-	                   zs(3) = 0.25
-					   zs(4) = 0.50
-	                   zs(5) = 0.75 
-	                   zs(6) = 1.0 
-					   zs(7) = 1.25
-	                   zs(8) = 1.5 
-					   zs(9) = 1.75
-	                   zs(10) = 2.0
-					   zs(11) = 2.25
-					   zs(12) = 2.5
-					   zs(13) = 2.75
-	                   zs(14) = 3.0
-					   zs(15) = 3.25
-					   zs(16) = 3.5
-					   zs(17) = 3.75
-	                   zs(18) = 4.0
-					   zs(19) = 4.25
-					   zs(20) = 4.5
-					   zs(21) = 4.75
-	                   zs(22) = 5.0
-					   zs(23) = 5.5
-	                   zs(24) = 6.0 
-	                   zs(25) = 7.0 
-	                   zs(26) = 9.0 
-	                   zs(27) = 11.0 
-	                   zs(28) = 13.0 
-	                   zs(29) = 15.0 
-	                   zs(30) = 17.0 
-	                   zs(31) = 19.0 
-	                   zs(32) = 22.0 
-	                   zs(33) = 25.0 
-					   zs(34) = 30.0
-					   zs(35) = 35.0
-					   zs(36) = 40.0
-					   zs(37) = 45.0
-					   zs(38) = 50.0
-					   zs(39) = 55.0
-					   zs(40) = 60.0
-					   zs(41) = 65.0
-					   zs(42) = 70.0
-					   zs(43) = 75.0
-			   deg_factor(1:1) = 1
-			   deg_factor(2:2) = 2
-			   deg_factor(3:43) = 2
-     			case (9001)
-			   write(6,*)'using grid scheme 9001  - it is pretty great'
-			   nzs = 24
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 0.25 
-	                   zs(3) = 0.5 
-	                   zs(4) = 1.0 
-	                   zs(5) = 1.5 
-	                   zs(6) = 2.0 
-	                   zs(7) = 3.0 
-	                   zs(8) = 4.0 
-	                   zs(9) = 5.0 
-	                   zs(10) = 6.0 
-	                   zs(11) = 7.0 
-	                   zs(12) = 9.0 
-	                   zs(13) = 11.0 
-	                   zs(14) = 13.0 
-	                   zs(15) = 15.0 
-	                   zs(16) = 17.0 
-	                   zs(17) = 19.0 
-	                   zs(18) = 22.0 
-	                   zs(19) = 25.0 
-					   zs(20) = 30.0
-					   zs(21) = 35.0
-					   zs(22) = 40.0
-					   zs(23) = 45.0
-					   zs(24) = 50.0
-			   deg_factor(1:1) = 1
-			   deg_factor(2:14) = 2
-			   deg_factor(15:24) = 4
-				case (9002)
-			   write(6,*)'using grid scheme 9002  - it is pretty great'
-			   nzs = 8
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 1.0 
-	                   zs(3) = 4.0 
-	                   zs(4) = 9.0 
-	                   zs(5) = 15.0 
-	                   zs(6) = 20.0 
-	                   zs(7) = 30.0 
-	                   zs(8) = 40.0 
-			   deg_factor(1:1) = 1
-			   deg_factor(2:4) = 2
-			   deg_factor(5:8) = 4
-				case (9003)
-			   write(6,*)'using grid scheme 9003  - it is pretty great'
-			   nzs = 8
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 1.0 
-	                   zs(3) = 4.0 
-	                   zs(4) = 9.0 
-	                   zs(5) = 15.0 
-	                   zs(6) = 20.0 
-	                   zs(7) = 30.0 
-	                   zs(8) = 40.0 
-			   deg_factor(1:1) = 1
-			   deg_factor(2:8) = 2
 			case (4359)
 			   write(6,*)'using grid scheme 4359'
 			nzs = 15
@@ -679,167 +614,6 @@ contains
 			zs(15) = 25.0
 			deg_factor(1) = 1
 			deg_factor(2:15) = 2
-
-     			case (41)
-			   write(6,*)'using grid scheme 41'
-			   nzs = 19
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 0.25 
-	                   zs(3) = 0.5 
-	                   zs(4) = 1.0 
-	                   zs(5) = 1.5 
-	                   zs(6) = 2.0 
-	                   zs(7) = 3.0 
-	                   zs(8) = 4.0 
-	                   zs(9) = 5.0 
-	                   zs(10) = 6.0 
-	                   zs(11) = 7.0 
-	                   zs(12) = 9.0 
-	                   zs(13) = 11.0 
-	                   zs(14) = 13.0 
-	                   zs(15) = 15.0 
-	                   zs(16) = 17.0 
-	                   zs(17) = 19.0 
-	                   zs(18) = 22.0 
-	                   zs(19) = 25.0 
-		
-			   deg_factor(1) = 1
-			   deg_factor(2:11) = 2
-			   deg_factor(12:19) = 3
-     			case (39)
-			   write(6,*)'using grid scheme 39'
-			   nzs = 18
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 0.5 
-	                   zs(3) = 1.0 
-	                   zs(4) = 1.5 
-	                   zs(5) = 2.0 
-	                   zs(6) = 3.0 
-	                   zs(7) = 4.0 
-	                   zs(8) = 5.0 
-	                   zs(9) = 6.0 
-	                   zs(10) = 7.0 
-	                   zs(11) = 9.0 
-	                   zs(12) = 11.0 
-	                   zs(13) = 13.0 
-	                   zs(14) = 15.0 
-	                   zs(15) = 17.0 
-	                   zs(16) = 19.0 
-	                   zs(17) = 22.0 
-	                   zs(18) = 25.0 
-		
-			   deg_factor(1:3) = 1
-			   deg_factor(4:11) = 2
-			   deg_factor(12:18) = 3
-     			case (38)
-			   write(6,*)'using grid scheme 38'
-			   nzs = 18
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 0.5 
-	                   zs(3) = 1.0 
-	                   zs(4) = 1.5 
-	                   zs(5) = 2.0 
-	                   zs(6) = 3.0 
-	                   zs(7) = 4.0 
-	                   zs(8) = 5.0 
-	                   zs(9) = 6.0 
-	                   zs(10) = 7.0 
-	                   zs(11) = 9.0 
-	                   zs(12) = 11.0 
-	                   zs(13) = 13.0 
-	                   zs(14) = 15.0 
-	                   zs(15) = 17.0 
-	                   zs(16) = 19.0 
-	                   zs(17) = 22.0 
-	                   zs(18) = 25.0 
-		
-			   deg_factor(1:8) = 1
-			   deg_factor(9:11) = 2
-			   deg_factor(12:18) = 3
-     			case (37)
-			   write(6,*)'using grid scheme 37'
-			   nzs = 18
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 0.5 
-	                   zs(3) = 1.0 
-	                   zs(4) = 1.5 
-	                   zs(5) = 2.0 
-	                   zs(6) = 3.0 
-	                   zs(7) = 4.0 
-	                   zs(8) = 5.0 
-	                   zs(9) = 6.0 
-	                   zs(10) = 7.0 
-	                   zs(11) = 9.0 
-	                   zs(12) = 11.0 
-	                   zs(13) = 13.0 
-	                   zs(14) = 15.0 
-	                   zs(15) = 17.0 
-	                   zs(16) = 19.0 
-	                   zs(17) = 22.0 
-	                   zs(18) = 25.0 
-		
-			   deg_factor(1:6) = 1
-			   deg_factor(7:13) = 2
-			   deg_factor(14:18) = 3
-
-     			case (371)
-			   write(6,*)'using grid scheme 371'
-			   nzs = 26
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 0.5 
-	                   zs(3) = 1.0 
-	                   zs(4) = 1.5 
-	                   zs(5) = 2.0
-			   zs(6) = 2.5 
-	                   zs(7) = 3.0
-			   zs(8) = 3.5 
-	                   zs(9) = 4.0
-			   zs(10) = 4.5 
-	                   zs(11) = 5.0 
-			   zs(12) = 5.5
-	                   zs(13) = 6.0 
-			   zs(14) = 6.5
-	                   zs(15) = 7.0 
-			   zs(16) = 8.0
-	                   zs(17) = 9.0 
-			   zs(18) = 10.0
-	                   zs(19) = 11.0
-			   zs(20) = 12.0 
-	                   zs(21) = 13.0 
-	                   zs(22) = 15.0 
-	                   zs(23) = 17.0 
-	                   zs(24) = 19.0 
-	                   zs(25) = 22.0 
-	                   zs(26) = 25.0 
-		
-			   deg_factor(1:7) = 1
-			   deg_factor(8:18) = 2
-			   deg_factor(19:26) = 3
-
-     			case (89)
-			   write(6,*)'using grid scheme 89'
-			   nzs = 6
-			   Allocate(zs(nzs))
-			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-	                   zs(2) = 1.25 
-	                   zs(3) = 2.5 
-	                   zs(4) = 10.0 
-	                   zs(5) = 15.0 
-	                   zs(6) = 17.0 
-		
-			   deg_factor(1) = 1
-			   deg_factor(2:6) = 3
      			case default
 			   write(6,*)'using default scheme'
         		   nzs = 6
@@ -858,44 +632,40 @@ contains
 			   deg_factor(5) = 4
 			   deg_factor(6) = 4
   			end select  
-		!	Write(6,*)zs
-		!	Write(6,*)deg_factor
 
 	End Subroutine Pick_Grid_Scheme
 
-	Subroutine Pack_Grid()
-		Implicit None
-		Integer :: iz, iy,ix,ii
-		Integer*8 :: ind, nxy, indz
-		Real*8 :: this_dxy
+	SUBROUTINE Pack_Grid()
+		IMPLICIT NONE
+		INTEGER :: iz, iy,ix,ii
+		INTEGER*8 :: ind, nxy, indz
+		REAL*8 :: this_dxy
 		ind = 1
 		indz = 1
-		do iz = 1, nzs
-		  nxy = nxsz(iz)*nysz(iz)
-		  do iy = 1, nysz(iz)
-		
-			lats_pack(ind:ind+nxsz(iz)-1) = lats(iy,iz)
-			do ii = 1, nxsz(iz)
-				lons_pack(ind+ii-1) = lons(ii,iz)
-			enddo
-			ind = ind+nxsz(iz)
-		  enddo
-		  zs_pack(indz:indz+nxy-1) = zs(iz)
-		  deltaz(indz:indz+nxy-1) = dzs(iz)
-		  indz = indz+nxy
-		enddo
+		DO iz = 1, nzs
+			nxy = nxsz(iz)*nysz(iz)
+			DO iy = 1, nysz(iz)
+				lats_pack(ind:ind+nxsz(iz)-1) = lats(iy,iz)
+				DO ii = 1, nxsz(iz)
+					lons_pack(ind+ii-1) = lons(ii,iz)
+				ENDDO
+				ind = ind+nxsz(iz)
+			ENDDO
+			zs_pack(indz:indz+nxy-1) = zs(iz)
+			deltaz(indz:indz+nxy-1) = dzs(iz)
+			indz = indz+nxy
+		ENDDO
 		ind = 1
-		do iz = 1, nzs
-		this_dxy = (lons_pack(2)-lons_pack(1))*deg_factor(iz)
-		do iy = 1, nysz(iz)
-		do ii = 1, nxsz(iz)
-			dvolume(ind) = this_dxy*dzs(iz)
-			ind = ind+1
-		enddo
-		enddo
-		enddo
-
-	End Subroutine Pack_grid
+		DO iz = 1, nzs
+			this_dxy = (lons_pack(2)-lons_pack(1))*deg_factor(iz)
+			DO iy = 1, nysz(iz)
+				DO ii = 1, nxsz(iz)
+					dvolume(ind) = this_dxy*dzs(iz)
+					ind = ind+1
+				ENDDO
+			ENDDO
+		ENDDO
+	END SUBROUTINE Pack_grid
 
 	Subroutine Build_Zweights()
 		Implicit None
