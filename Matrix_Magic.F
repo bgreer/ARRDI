@@ -408,6 +408,7 @@ Contains
 		REAL*8 :: tsize_deg, apod_factor
 		CHARACTER*50 :: rstring, tstring
 		CHARACTER*120 :: parfile, dfile
+		INTEGER :: ierr
 		! for now, everyone reads in the same files
 		! these filenames should depend on the region id, however
 		WRITE(rstring,'(i10)')region_id
@@ -441,41 +442,24 @@ Contains
 		DO i = 1, ntsizes
 			tsize_pix = tsizes(i)
 			tsize_deg = tsize_pix/8.0
-		  	! this bit is still coded assuming that nxk is 17 - make this arbitrary too
-			! some pseudo code
-			! delta_pix = (nxk-int(tsize_deg*apod_factor/dlonlat)-1)/2  ! split the difference
-			! i_min = 1+delta_pix
-			! i_max = nxk-delta_pix
-			IF ( tsize_pix == 128) THEN
-				i_min = 1
-				j_min = 1
-				i_max = 17
-				j_max = 17
-			ENDIF
-			IF (tsize_pix == 32) THEN
-				i_min = 7-cct
-				j_min = 7-cct
-				i_max = 11+cct
-				j_max = 11+cct                  
-			ENDIF
-			IF (tsize_pix == 16) THEN
-				i_min = 8-cct
-				j_min = 8-cct
-				i_max = 10+cct
-				j_max = 10+cct
-			ENDIF
 			apod_factor = 7.5/8.0
 			delta_pix = (nxk-int(tsize_deg*apod_factor/dlonlat)-1)/2  ! split the difference
 			i_min = 1+delta_pix
 			i_max = nxk-delta_pix
 			j_min = i_min
 			j_max = i_max
-			CALL Load_Kernels(tsize_pix)
+			! Loading kernels and data does not take much time
+			! Maybe a few seconds, but this could be significant for tiny
+			! inversions
+			CALL Load_Kernels(tsize_pix) ! TODO: make this parallel
 			smeared_kers = smeared_kers*dlonlat*dlonlat
-			CALL Load_Dataset(region_id,tsize_pix)		
+			CALL Load_Dataset(region_id,i) ! TODO: also this
 
-			CALL Create_Nonzero_Table()  ! more bookeeping for parallel build of matrix
-			CALL Augment_A_Parallel()   ! load the A_transpose#A and A_tranpose#data for each tilesize
+			CALL Create_Nonzero_Table(i)  ! more bookeeping for parallel build of matrix
+			btime0 = MPI_Wtime(ierr)
+			CALL Augment_A_Parallel(i)   ! load the A_transpose#A and A_tranpose#data for each tilesize
+			btime1 = btime1 + MPI_Wtime(ierr) - btime0
+			! ^ takes the majority of the time
 
 			DEALLOCATE(uxy)
 			DEALLOCATE(n)
@@ -492,7 +476,7 @@ Contains
 		erhy = erhy/erhyc
 		erhy = sqrt(1.0/erhy)
 
-		IF (myid == 0) WRITE(*,'(A,F8.3,A,F8.3)')' Error Harm. Mean is :', erhx, ', ', erhy
+		IF (myid == 0) WRITE(*,'(A,F8.3,A,F8.3)')' Error Harmonic Mean is :', erhx, ', ', erhy
 		atax = atax*(erhx*erhx) ! +regm    - regularization is now done in pinv()
 		atay = atay*(erhy*erhy) ! +regm
 		atransposex = atransposex*(erhx*erhx)
@@ -501,47 +485,44 @@ Contains
 		rhs_y = rhs_y*(erhy*erhy)	
 	END SUBROUTINE Build_Region
 
-  Subroutine Create_Nonzero_Table()
+	SUBROUTINE Create_Nonzero_Table(ts_index)
+		! no implicit none?
+		INTEGER*8 :: nloc, ilon, ilat, ii, jj, ind, ts_index
+		INTEGER*8, ALLOCATABLE :: nz_locs(:)
+		ALLOCATE(nz_locs(1:nsolution))		
 
+		DO ilat = 1, nlat(ts_index)
+			DO ilon = 1, nlon(ts_index)
+				nloc = ata_num(ilon,ilat)
+				nz_locs(:) = 0
+				DO ii = 1, nloc
+					nz_locs(ata_indices(ii,ilon,ilat)+1) = 1
+				ENDDO
+				ind = 0
+				DO jj = 1, my_ncol
+					IF (nz_locs(my_cols(jj)) == 1) THEN
+						ind = ind+1
+						jlocal_indices(ind,ilon,ilat) = jj
+						nzc_indices(ind,ilon,ilat) = my_cols(jj)
+					ENDIF
+				ENDDO
+				nznc_num(ilon,ilat) = ind
+				ind = 0
+				DO ii = 1, my_nrow
+					IF (nz_locs(my_rows(ii)) == 1) THEN
+					ind = ind+1
+					ilocal_indices(ind,ilon,ilat) = ii
+					nzr_indices(ind,ilon,ilat) = my_rows(ii)
+					ENDIF
+				ENDDO
+				nznr_num(ilon,ilat) = ind
+			ENDDO
+		ENDDO
 
+		DEALLOCATE(nz_locs)
+	END SUBROUTINE Create_Nonzero_Table
 
-		Integer*8 :: nloc, ilon, ilat, ii, jj, ind
-		Integer*8, Allocatable :: nz_locs(:)
-		Allocate(nz_locs(1:nsolution))		
-
-		do ilat = 1, nlat
-                  do ilon = 1, nlon
-                    nloc = ata_num(ilon,ilat)
-		    nz_locs(:) = 0
-		    do ii = 1, nloc
-			nz_locs(ata_indices(ii,ilon,ilat)+1) = 1
-		    enddo
-		    ind = 0
-		    do jj = 1, my_ncol
-			if (nz_locs(my_cols(jj)) .eq. 1) then
-				ind = ind+1
-				jlocal_indices(ind,ilon,ilat) = jj
-				nzc_indices(ind,ilon,ilat) = my_cols(jj)
-			endif
-		    enddo
-		    nznc_num(ilon,ilat) = ind
-		    ind = 0
-		    do ii = 1, my_nrow
-			if (nz_locs(my_rows(ii)) .eq. 1) then
-				ind = ind+1
-				ilocal_indices(ind,ilon,ilat) = ii
-				nzr_indices(ind,ilon,ilat) = my_rows(ii)
-			endif
-		    enddo
-		    nznr_num(ilon,ilat) = ind
-
-		  enddo
-		enddo
-
-		DeAllocate(nz_locs)
-  End Subroutine Create_Nonzero_Table
-
-  Subroutine Augment_A_Parallel()
+  Subroutine Augment_A_Parallel(ts_index)
     ! Different from the original Augment A in that each processors builds a piece of
     ! each matrix - rather than a whole matrix which is then communicates.  Should allow
     ! for more memory efficiency and should help with the computation of the averaging
@@ -553,15 +534,15 @@ Contains
     Real*8, Allocatable :: slice_new(:,:)
     Real*8 :: dx,dy,ex,ey,esqx,esqy, my_total, prod
 
-    Integer*8 :: ii, ik, el, icn, iz, im, jm, ilat, ilon, this_j, this_i, pack_ind
+    Integer*8 :: ii, ik, el, icn, iz, im, jm, ilat, ilon, this_j, this_i, pack_ind, ts_index
     Integer*8 :: el_num, s_num, el_ind, nnk, this_index, aindex, iin, num, i, j, offset
     Integer*8 :: some_i, some_j
     Integer*8 :: nshftx, nshfty,loc_num, nstop, test, my_j, my_i, my_z, nx0, ny0, s_ind, this_ind
     Integer*8 :: nznc, nznr
     Integer*8, Allocatable :: spread_locs(:), nzrows(:), nzcols(:), ilocal(:), jlocal(:)
     Character*120 :: tempfile
-    	n_lats = nlat   ! this is a revision to Augment_A to 
-	n_lons = nlon   ! make this routine mesh with the data_management routines.
+    	n_lats = nlat(ts_index)   ! this is a revision to Augment_A to 
+	n_lons = nlon(ts_index)   ! make this routine mesh with the data_management routines.
     Allocate(augres(1:nxk,1:nyk,1:nzs))  ! augres gets dimensions of kernels horizontally -
                                     ! not of full solution grid
     Allocate(result(1:nxk,1:nyk,1:nzk))
@@ -570,26 +551,26 @@ Contains
     nx0 = nxsz(1)
     ny0 = nysz(1)
 
-    do ii = 1, n_n
+    do ii = 1, n_n(ts_index)
 !    do ii = 1, 1
  !   Write(6,*)'Augmenting A', ii
 
       if (indicn(ii) .gt. 0) then  ! do we process this n?
-      do ik = 1, n_k
+      do ik = 1, n_k(ts_index)
 !      do ik = 2, 2
  
      if(indic(ik,ii) .gt. 0) then !do we process this k?
          this_index = 0       !now, find the kernel for this mode in
          nnk = 1
          do while (this_index .eq. 0)
-                if (nkindex(1,nnk) .eq. n(ii) ) then
-                        if (nkindex(2,nnk) .eq. ki(ik)) then
+                if (nkindex(1,nnk) .eq. n(ii,ts_index) ) then
+                        if (nkindex(2,nnk) .eq. ki(ik,ts_index)) then
                                 this_index = nnk
                         endif
                 endif
                 nnk = nnk+1
 		if (nnk .gt. nkers) then 
-			write(6,*)'Fatal Error :  kernel not found for this n k combo : ', n(ii), ki(ik)
+			write(6,*)'Fatal Error :  kernel not found for this n k combo : ', n(ii,ts_index), ki(ik,ts_index)
 			!write(6,*)'data: ', nnk, nkers, nkindex(:,nnk)
 !			write(6,*)'nkindex = ', nkindex(1,:)
 !			write(6,*)'nkindex2= ', nkindex(2,:)
@@ -685,10 +666,10 @@ Contains
 			!#######    on the inversion grid (it has been converted from the native
 			!#######    kernel grid using weight_arr
 
-                        dx = uxy(1,aindex)
-                        ex = uxy(2,aindex)
-                        dy = uxy(3,aindex)
-                        ey = uxy(4,aindex)
+                        dx = uxy(1,aindex,1)
+                        ex = uxy(2,aindex,1)
+                        dy = uxy(3,aindex,1)
+                        ey = uxy(4,aindex,1)
                         esqx = ex*ex
                         esqy = ey*ey
 

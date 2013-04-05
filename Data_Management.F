@@ -9,23 +9,27 @@ Module Data_Management
 	!   or (in the case of MDI data) IDL. 
 
 	Implicit None
-	Integer*8, Public :: ndata, ntsizes, n_n, n_k
+	Integer*8, Public :: ntsizes
+	INTEGER*8, PUBLIC, ALLOCATABLE :: ndata(:), n_n(:), n_k(:)
 	Logical, Public :: compute_res_ker_unres = .True.
 	Integer*8, Allocatable, Public :: nktindex(:,:,:,:), indic(:,:), indicn(:), kxy(:,:,:), tsizes(:)
-	Integer*8, Allocatable, Public :: ki(:), n(:), tile_sizes(:)
+	Integer*8, Allocatable, Public :: ki(:,:), n(:,:), tile_sizes(:)
+	CHARACTER*300, ALLOCATABLE, PUBLIC :: data_files(:)
+	INTEGER*8, ALLOCATABLE, PUBLIC :: lon_all(:,:), lat_all(:,:)
         Integer*8, Allocatable :: nzr_indices(:,:,:), nzc_indices(:,:,:), ilocal_indices(:,:,:), jlocal_indices(:,:,:)
 	Integer*8, Allocatable :: nznr_num(:,:), nznc_num(:,:)
-	Integer*8, Public :: nlon, nlat  !  , grid_scheme
-	Integer*8, Allocatable, Private :: nvals(:), kvals(:)
+	Integer*8, Public, ALLOCATABLE :: nlon(:), nlat(:)  !  , grid_scheme
+	Integer*8, Allocatable, Private :: nvals(:,:), kvals(:,:)
 	Real*8, Allocatable, Public :: latvals(:), lonvals(:)
-	Real*8, Allocatable, Public :: uxy(:,:)
+	Real*8, Allocatable, Public :: uxy(:,:,:)
 	real*8, Allocatable :: lon(:), lat(:)
+
 	Real*8, Public :: lh, lv, deltalv, deltalh, sigma, lat_lims0(2), lon_lims0(2), max_tile_size, tsize_deg
     	Namelist /Input_Namelist/ x_block_size, y_block_size, x_block_size_a,n_regions, &
 		kernel_set, ntsizes, lh, lv, deltalv, deltalh, sigma, dlonlat, grid_scheme, tile_sizes, max_iter, &
 		stitch_boundaries_only, stitch_regions, propagate_errors, compute_avg_kernels, &
 		compute_coarse_kernels, forward_weight, onesided_boundary_stitching, &
-		grid_file
+		grid_file, data_files
 
 	CONTAINS
 	
@@ -56,6 +60,7 @@ Module Data_Management
 		! Initialize lh, lv, lsigma, n_regions
 		! then read the latitude and longitude limits
 		ALLOCATE(tile_sizes(1:mxts))
+		ALLOCATE(data_files(1:mxts))
 		run_file = 'input/main_input'
 		region_file = 'input/region_limits'
 		OPEN(10, FILE=run_file)
@@ -82,9 +87,9 @@ Module Data_Management
 		lon_lims0(:) = lon_lims(:,1)
 	END SUBROUTINE Read_Run_Info
 	
-	SUBROUTINE Load_Dataset(region_id,tile_size_id)
+	SUBROUTINE Load_Dataset(region_id,ts_index)
 		IMPLICIT NONE
-		INTEGER*8 :: region_id, tile_size_id
+		INTEGER*8 :: region_id, ts_index
 
 		! The indice building routines need to know the 
 		! solution grid for this region
@@ -93,12 +98,12 @@ Module Data_Management
 		lats(:,:) = lats(:,:)+lat_lims(1,region_id+1)-lat_lims0(1)
 		lons_pack(:) = lons_pack(:)+lon_lims(1,region_id+1)-lon_lims0(1)
 		lons(:,:) = lons(:,:)+lon_lims(1,region_id+1)-lon_lims0(1)
-		CALL Read_Raw_Data(region_id,tile_size_id)
+		CALL Read_Raw_Data(region_id,ts_index)
 
-		tsize_deg = tile_size_id/8.0
-		CALL Build_Indices()
-		CALL Build_Shift()
-		CALL Generate_ATA_Indices()
+		tsize_deg = tsizes(ts_index)/8.0
+		CALL Build_Indices(ts_index)
+		CALL Build_Shift(ts_index)
+		CALL Generate_ATA_Indices(ts_index)
 
 		! Revert in case we need to load another region
 		lats_pack(:) = lats_pack(:)-lat_lims(1,region_id+1)+lat_lims0(1)
@@ -112,140 +117,213 @@ Module Data_Management
 		DEALLOCATE(lonvals)
 		DEALLOCATE(lon)
 		DEALLOCATE(lat)	
-		IF (myid == 0) WRITE(*,'(A,I3,A,I4,A,I8,A)')" Data from region ",region_id," for tilesize ",tile_size_id,&
-			" is loaded (ndata=", ndata, ")."
+		IF (myid == 0) WRITE(*,'(A,I3,A,I4,A,I8,A)')" Data from region ",region_id," for tilesize ",ts_index,&
+			" is loaded (ndata=", ndata(ts_index), ")."
 	END SUBROUTINE Load_Dataset
+
+	! load all of the data into the large array uxy
+	! should do something similar to Read_Raw_Data
+	! Added 04/2013 bgreer
+	SUBROUTINE Read_All_Data()
+		IMPLICIT NONE
+		CHARACTER*120 :: dfile, indir, tstring
+		INTEGER*8 :: maxndata
+		INTEGER :: ii, ij, stat, ierr
+		REAL*8 :: dummy
+		REAL*8, ALLOCATABLE :: lonarr(:), latarr(:)
+		REAL*8, ALLOCATABLE :: temparr(:)
+
+		ALLOCATE(ndata(ntsizes))
+
+		IF (myid == 0) THEN
+			! find max ndata
+			DO ii=1,ntsizes
+				WRITE(tstring,'(I10)')tsizes(ii)
+				dfile = 'input/data_'//TRIM(ADJUSTL(tstring))
+				ndata(ii) = 0
+				stat = 0
+				OPEN(30,FILE=dfile)
+				DO WHILE (stat == 0)
+					READ(30,*,IOSTAT=stat), dummy
+					ndata(ii) = ndata(ii) + 1
+				ENDDO
+				CLOSE(30)
+				ndata(ii) = ndata(ii) - 1
+			ENDDO
+		ENDIF
+
+		CALL MPI_Barrier(MPI_COMM_WORLD, ierr)
+		CALL MPI_Bcast(ndata, ntsizes, MPI_INTEGER8, 0, MPI_COMM_WORLD, ierr)
+
+		! allocate space for all data
+		maxndata = MAXVAL(ndata)
+		ALLOCATE(uxy(4,maxndata,ntsizes))
+		ALLOCATE(nvals(maxndata,ntsizes))
+		ALLOCATE(kvals(maxndata,ntsizes))
+		ALLOCATE(lon_all(maxndata,ntsizes))
+		ALLOCATE(lat_all(maxndata,ntsizes))
+		ALLOCATE(nlon(ntsizes))
+		ALLOCATE(nlat(ntsizes))
+		ALLOCATE(n_n(ntsizes))
+		ALLOCATE(n_k(ntsizes))
+
+		! go back and read the data
+		DO ii=1,ntsizes
+			IF (myid == 0) THEN
+				OPEN(30,FILE=data_files(ii))
+				DO ij=1,ndata(ii)
+					READ(30,*) dummy
+					uxy(1,ij,ii) = dummy
+					uxy(2,ij,ii) = dummy
+					uxy(3,ij,ii) = dummy
+					uxy(4,ij,ii) = dummy
+					nvals(ij,ii) = dummy
+					kvals(ij,ii) = dummy
+					lat_all(ij,ii) = dummy
+					lon_all(ij,ii) = dummy
+				ENDDO
+				CLOSE(30)
+			ENDIF
+
+			CALL MPI_Barrier(MPI_COMM_WORLD, ierr)
+			CALL MPI_Bcast(uxy, 4*maxndata*ntsizes, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+			CALL MPI_Bcast(nvals, maxndata*ntsizes, MPI_INTEGER8, 0, MPI_COMM_WORLD, ierr)
+			CALL MPI_Bcast(kvals, maxndata*ntsizes, MPI_INTEGER8, 0, MPI_COMM_WORLD, ierr)
+			CALL MPI_Bcast(lat_all, maxndata*ntsizes, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+			CALL MPI_Bcast(lon_all, maxndata*ntsizes, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+
+			! sort lon/lat arrays to get unique elements
+			ALLOCATE(lonarr(ndata(ii)))
+			ALLOCATE(latarr(ndata(ii)))
+			ALLOCATE(temparr(ndata(ii)))
+			temparr(:) = lon_all(1:ndata(ii),ii)
+			lonarr = sort_array(temparr,ndata(ii))
+			temparr(:) = lat_all(1:ndata(ii),ii)
+			latarr = sort_array(temparr,ndata(ii))
+			CALL find_unique(lonarr)
+			CALL find_unique(latarr)
+			nlon(ii) = SIZE(lonarr)
+			nlat(ii) = SIZE(latarr)
+			DEALLOCATE(temparr)
+			DEALLOCATE(lonarr)
+			DEALLOCATE(latarr)
+
+			n_n(ii) = MAXVAL(nvals(:,ii))-MINVAL(nvals(:,ii))+1
+			n_k(ii) = MAXVAL(kvals(:,ii))-MINVAL(kvals(:,ii))+1
+			ALLOCATE(n(n_n(ii),ntsizes))
+			ALLOCATE(ki(n_k(ii),ntsizes))
+			ki(1,ii) = MINVAL(kvals(:,ii))
+			DO ij = 2, n_k(ii)
+				ki(ij,ii) = ki(ij-1,ii)+1
+			ENDDO
+			n(1,ii) = MINVAL(nvals(:,ii))
+			DO ij = 2, n_n(ii)
+				n(ij,ii) = n(ij-1,ii)+1
+			ENDDO
+		ENDDO
+
+	END SUBROUTINE Read_All_Data
   
-  Subroutine Read_Raw_Data(r_id,t_id)
+	SUBROUTINE Read_Raw_Data(r_id,t_id)
+		IMPLICIT NONE
+		REAL*8, ALLOCATABLE :: ex(:), ux(:), ey(:), uy(:)
+		INTEGER*8 :: i, r_id, t_id
+		CHARACTER*120 :: dfile, rstring,tstring, indir, file1
+		! need to read ndata, nlon, and nlat
+		! Otherwise will need to sort lonvals and latvals to get nlon, nlat, and lat and lon
+		! lat and lon are the unique latitudes and longitudes for a given tile size
+
+		! open 1 file first to get the dimensions
+
+		WRITE(rstring,'(i10)')r_id
+		WRITE(tstring,'(i10)')t_id
+		indir = 'input/'
+
+		IF (ALLOCATED(ex)) DEALLOCATE(ex)
+		IF (ALLOCATED(ey)) DEALLOCATE(ey)
+		IF (ALLOCATED(ux)) DEALLOCATE(ux)
+		IF (ALLOCATED(uy)) DEALLOCATE(uy)
+		IF (ALLOCATED(uxy)) DEALLOCATE(uxy)
+
+		dfile = TRIM(ADJUSTL(indir))//'ex_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+		CALL Read_Ascii(ex,dfile)
+
+		dfile = TRIM(ADJUSTL(indir))//'ey_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+		CALL Read_Ascii(ey,dfile)
+
+		dfile = TRIM(ADJUSTL(indir))//'ux_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+		CALL Read_Ascii(ux,dfile)
+
+		dfile = TRIM(ADJUSTL(indir))//'uy_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+		CALL Read_Ascii(uy,dfile)
+
+!		ndata = SIZE(ux)
+!		ALLOCATE(uxy(4,ndata))
+
+!		uxy(1,:) = ux(:)
+!		uxy(2,:) = ex(:)
+!		uxy(3,:) = uy(:)
+!		uxy(4,:) = ey(:)	
+
+		DEALLOCATE(ex)
+		DEALLOCATE(ey)
+		DEALLOCATE(ux)
+		DEALLOCATE(uy)
+
+		IF (ALLOCATED(nvals)) DEALLOCATE(nvals)
+		IF (ALLOCATED(kvals)) DEALLOCATE(kvals)
+		IF (ALLOCATED(latvals)) DEALLOCATE(latvals)
+		IF (ALLOCATED(lonvals)) DEALLOCATE(lonvals)
+		IF (ALLOCATED(lat)) DEALLOCATE(lat)
+		IF (ALLOCATED(lon)) DEALLOCATE(lon)
+
+		dfile = TRIM(ADJUSTL(indir))//'n_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+!		CALL Read_Ascii_int(nvals,dfile)
+
+		dfile = TRIM(ADJUSTL(indir))//'k_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+!		CALL Read_Ascii_int(kvals,dfile)
+
+		dfile = TRIM(ADJUSTL(indir))//'lat_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+!		CALL Read_Ascii(latvals,dfile)
+
+		dfile = TRIM(ADJUSTL(indir))//'lon_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
+!		CALL Read_Ascii(lonvals,dfile)	
+
+!		nlat = SIZE(latvals)
+!		nlon = SIZE(lonvals)
+	
+!		ALLOCATE(lat(1:nlat))
+!		ALLOCATE(lon(1:nlon))
+!		lat = sort_array(latvals,nlat)
+!		lon = sort_array(lonvals, nlon)
+	
+!		CALL find_unique(lat)
+!		CALL find_unique(lon)
+
+!		nlon = SIZE(lon)
+!		nlat = SIZE(lat)
+
+!		n_n = MAXVAL(nvals)-MINVAL(nvals)+1
+!		n_k = MAXVAL(kvals)-MINVAL(kvals)+1
+!		IF (ALLOCATED(n)) DEALLOCATE(n)
+!		IF (ALLOCATED(ki)) DEALLOCATE(ki)
+!		ALLOCATE(n(n_n))
+!		ALLOCATE(ki(n_k))
+!		ki(1) = MINVAL(kvals)
+!		DO i = 2, n_k
+!			ki(i) = ki(i-1)+1
+!		ENDDO
+!		n(1) = MINVAL(nvals)
+!		DO i = 2, n_n
+!			n(i) = n(i-1)+1
+!		ENDDO
+	END SUBROUTINE Read_Raw_Data
+
+
+
+  Subroutine Build_Indices(ts_index)
 	Implicit None
-	Real*8, Allocatable :: ex(:), ux(:), ey(:), uy(:)
-	Integer*8 :: i, r_id, t_id
-	Character*120 :: dfile, rstring,tstring, indir, status_message,file1
-	! need to read ndata, nlon, and nlat
-	! Otherwise will need to sort lonvals and latvals to get nlon, nlat, and lat and lon
-	! lat and lon are the unique latitudes and longitudes for a given tile size
-
-	! open 1 file first to get the dimensions
-
-        Write(rstring,'(i10)')r_id
-	Write(tstring,'(i10)')t_id
-!	indir = "/home3/feathern/inversions/INV3D_2.0/test_files/"
-	indir = 'input/'
-	status_message = 'Data from region '//TRIM(ADJUSTL(rstring))//' for tilesize '//TRIM(ADJUSTL(tstring))//' successfully read.'
-
-	If (Allocated(ex)) DeAllocate(ex)
-        If (Allocated(ey)) DeAllocate(ey)
-	If (Allocated(ux)) DeAllocate(ux)
-        If (Allocated(uy)) DeAllocate(uy)
-        If (Allocated(uxy)) DeAllocate(uxy)
-	
-        dfile = TRIM(ADJUSTL(indir))//'ex_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-	Call Read_Ascii(ex,dfile)
-
-        dfile = TRIM(ADJUSTL(indir))//'ey_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-	Call Read_Ascii(ey,dfile)
-
-        dfile = TRIM(ADJUSTL(indir))//'ux_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-	Call Read_Ascii(ux,dfile)
-
-        dfile = TRIM(ADJUSTL(indir))//'uy_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-	Call Read_Ascii(uy,dfile)
-
-	ndata = size(ux)
-	Allocate(uxy(4,ndata))
-
-	uxy(1,:) = ux(:)
-	uxy(2,:) = ex(:)
-	uxy(3,:) = uy(:)
-	uxy(4,:) = ey(:)	
-
-!	file1 = 'uxy.fits'
-!	call writefits_2dd(uxy,file1,4,ndata)
-!	stop
-	DeAllocate(ex)
-	DeAllocate(ey)
-	DeAllocate(ux)
-	DeAllocate(uy)
-
-	If (Allocated(nvals)) DeAllocate(nvals)
-        If (Allocated(kvals)) DeAllocate(kvals)
-	If (Allocated(latvals)) DeAllocate(latvals)
-        If (Allocated(lonvals)) DeAllocate(lonvals)
-	If (Allocated(lat)) DeAllocate(lat)
-        If (Allocated(lon)) DeAllocate(lon)
-
-        dfile = TRIM(ADJUSTL(indir))//'n_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-	Call Read_Ascii_int(nvals,dfile)
-
-        dfile = TRIM(ADJUSTL(indir))//'k_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-!	write(6,*)dfile
-	Call Read_Ascii_int(kvals,dfile)
-
-        dfile = TRIM(ADJUSTL(indir))//'lat_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-	Call Read_Ascii(latvals,dfile)
-
-        dfile = TRIM(ADJUSTL(indir))//'lon_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-	Call Read_Ascii(lonvals,dfile)	
-
-	nlat = size(latvals)
-	nlon = size(lonvals)
-	
-	allocate(lat(1:nlat))
-	allocate(lon(1:nlon))
-	lat = sort_array(latvals,nlat)
-	lon = sort_array(lonvals, nlon)
-	
-	call find_unique(lat)
-	call find_unique(lon)
-!	lon
-	
-!		this was the old way - now we sort the input lon and lat values
-!        dfile = TRIM(ADJUSTL(indir))//'lonsort_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-!	Call Read_Ascii(lon,dfile)	
-!        dfile = TRIM(ADJUSTL(indir))//'latsort_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-!	Call Read_Ascii(lat,dfile)	
-
-
-	nlon = size(lon)
-	nlat = size(lat)
-!	write(6,*)'writing longitudes'
-!	do i = 1, nlon
-!		write(6,*)lon(i)
-!	enddo
-!	write(6,*)'writing latitudes'
-!	do i = 1, nlat
-!		write(6,*)lat(i)
-!	enddo
-
-!	stop
-
-	n_n = maxval(nvals)-minval(nvals)+1
-	n_k = maxval(kvals)-minval(kvals)+1
-	If (Allocated(n)) DeAllocate(n)
-	If (Allocated(ki)) DeAllocate(ki)
-	Allocate(n(n_n))
-	Allocate(ki(n_k))
-	ki(1) = minval(kvals)
-	Do i = 2, n_k
-		ki(i) = ki(i-1)+1
-	Enddo
-	n(1) = minval(nvals)
-	Do i = 2, n_n
-		n(i) = n(i-1)+1
-	Enddo
-!	Write(6,*)'n min, n max ', n(1), n(n_n)
-!	Write(6,*)'k min, k max ', ki(1), ki(n_k)
-!	write(6,*)'k ', n_k
-!	do i = 1, ndata
-!		write(6,*)kvals(i)
-!	enddo
-  End Subroutine Read_Raw_Data
-
-
-
-  Subroutine Build_Indices()
-	Implicit None
-	Integer*8 :: i, ii, jj, this_n, this_k, found,nmin,kmin
+	Integer*8 :: i, ii, jj, this_n, this_k, found,nmin,kmin, ts_index
 	Real*8 :: this_lat, this_lon
 	Character*120 :: file1
 	!  Builds nktindex, indicn, indic - to keep track of measurement modes and locations
@@ -260,27 +338,27 @@ Module Data_Management
 	
 	! need to make this work for an arbitrary n_min (right now assumes 0 - which is fine) - same with k
 
-	Allocate(nktindex(n_n,n_k,nlat,nlon))   ! note that the indices are a little out of the sensible order here - this is correct
-	Allocate(indicn(n_n))
-	Allocate(indic(n_k,n_n))
+	Allocate(nktindex(n_n(ts_index),n_k(ts_index),nlat(ts_index),nlon(ts_index)))   ! note that the indices are a little out of the sensible order here - this is correct
+	Allocate(indicn(n_n(ts_index)))
+	Allocate(indic(n_k(ts_index),n_n(ts_index)))
 	nktindex(:,:,:,:) = int(-1)     
 	indicn(:) = int(0)
 	indic(:,:) = int(0)
 !	Write(6,*), 'n_n is ',n_n, n(1)
 !	Write(6,*), 'n_k is ', n_k, ki(1), maxval(ki)
-	nmin = minval(n)
-	kmin = minval(ki)
-	Do i = 1, ndata
-		this_n = nvals(i)-nmin
-		this_k = kvals(i)-kmin
+	nmin = minval(n(:,ts_index))
+	kmin = minval(ki(:,ts_index))
+	Do i = 1, ndata(1)
+		this_n = nvals(i,ts_index)-nmin
+		this_k = kvals(i,ts_index)-kmin
 		this_lat = latvals(i)
 		this_lon = lonvals(i)
 		found = 0
 !		Do ii = 1, nxsz(1)
-		Do ii = 1, nlon
+		Do ii = 1, nlon(ts_index)
 		    if (found .eq. 0) then
 !		    Do jj = 1, nysz(1)
-		    Do jj = 1, nlat
+		    Do jj = 1, nlat(ts_index)
 			If ( (lon(ii) .eq. this_lon) .and. (lat(jj) .eq. this_lat) ) then
 				found = 1
 				nktindex(this_n+1,this_k+1,jj,ii) = i -1 ! see note in generate ATA indices for -1 explanation
@@ -300,26 +378,26 @@ Module Data_Management
 		
   End Subroutine Build_Indices
   
-  Subroutine Build_Shift()
+  Subroutine Build_Shift(ts_index)
 	! builds the kxy array that describes how each measurement's kernel should be 
 	! shifted into position onto the global grid.  kxy has been tested against
 	! IDL and the output verified.  There is a precision issue in the area of the code
 	! that uses int().   Hence the real*16 to be safe.
 	Implicit None
 	Integer ::i,j, xstart, xcen, ystart, ycen
-	Integer*8 :: xoff, yoff
+	Integer*8 :: xoff, yoff, ts_index
 	Real*16 :: lon_min, lat_min, dlon, dlat, this_lat, this_lon
 	Character*120 :: file1 
 	dlon = dlonlat
 	dlat = dlonlat
 	file1 = 'kxy.fits'
 	If (Allocated(kxy)) DeAllocate(kxy)
-	Allocate(kxy(2,nlon,nlat))
+	Allocate(kxy(2,nlon(ts_index),nlat(ts_index)))
 	lon_min = lons(1,1)
 	lat_min = lats(1,1)
 
-	DO j = 1, nlat
-	  DO i = 1, nlon
+	DO j = 1, nlat(ts_index)
+	  DO i = 1, nlon(ts_index)
 		xcen = lon(i)
 		ycen = lat(j)
 !		xstart = int(xcen/dlon)-(nxk-1)/2
@@ -348,14 +426,14 @@ Module Data_Management
   ! This Array appears to be correct - NF 9/17/2010
   End Subroutine Build_Shift
 
-  Subroutine Generate_ATA_Indices()
+  Subroutine Generate_ATA_Indices(ts_index)
 		! Figures out the nonzero locations for kernels of different horizontal (tile) sizes at
 		! each location on the solution grid.  Otherwise a lot of time can be wasted cross-correlating
 		! zeros when the inversion matrix is assembled.
 
 		! need 1D arrays for longitude and latitude from the input data - call them lon and lat
 		Implicit None
-		Integer*8 :: i,j,k, ioffset, nsolz, ii, iistart, iiend
+		Integer*8 :: i,j,k, ioffset, nsolz, ii, iistart, iiend, ts_index
 		Real*8 :: fudge, rad, radz, mxarr(2), lon_min, lon_max, lat_min, lat_max
 		Character*120 :: file1, file2
 		  If (Allocated(ata_indices)) DeAllocate(ata_indices)
@@ -367,14 +445,14 @@ Module Data_Management
 		  If (Allocated(nznr_num)) DeAllocate(nznr_num)
 		  If (Allocated(nznc_num)) DeAllocate(nznc_num)
 !		  Allocate(ata_indices(1:nsolution,1:nxsz(1),1:nysz(1)))
-		  Allocate(ata_indices(1:nsolution,nlon,nlat))
-		  Allocate(nzc_indices(1:nsolution,nlon,nlat))
-		  Allocate(nzr_indices(1:nsolution,nlon,nlat))
-		  Allocate(ilocal_indices(1:nsolution,nlon,nlat))
-		  Allocate(jlocal_indices(1:nsolution,nlon,nlat))
-		  Allocate(ata_num(nlon,nlat))
-		  Allocate(nznr_num(nlon,nlat))
-		  Allocate(nznc_num(nlon,nlat))
+		  Allocate(ata_indices(1:nsolution,nlon(ts_index),nlat(ts_index)))
+		  Allocate(nzc_indices(1:nsolution,nlon(ts_index),nlat(ts_index)))
+		  Allocate(nzr_indices(1:nsolution,nlon(ts_index),nlat(ts_index)))
+		  Allocate(ilocal_indices(1:nsolution,nlon(ts_index),nlat(ts_index)))
+		  Allocate(jlocal_indices(1:nsolution,nlon(ts_index),nlat(ts_index)))
+		  Allocate(ata_num(nlon(ts_index),nlat(ts_index)))
+		  Allocate(nznr_num(nlon(ts_index),nlat(ts_index)))
+		  Allocate(nznc_num(nlon(ts_index),nlat(ts_index)))
 
 		  ata_indices(:,:,:) = 0
 		  ata_num(:,:) = 0
@@ -397,10 +475,10 @@ Module Data_Management
 			radz = maxval(mxarr)
 			iistart = ioffset
 			iiend = iistart+nsolz-1
-			Do i = 1, nlon
+			Do i = 1, nlon(ts_index)
 				lon_min = lon(i)-radz
 				lon_max = lon(i)+radz
-				Do j = 1, nlat
+				Do j = 1, nlat(ts_index)
 					lat_min = lat(j)-radz
 					lat_max = lat(j)+radz
 					do ii = iistart, iiend
@@ -496,11 +574,11 @@ Module Data_Management
 	Endif
 	IF ( npts .eq. 2) Then
 		If (arr(1) .gt. arr(2)) then
-			write(6,*)'swapping ', arr(1:2)
+!			write(6,*)'swapping ', arr(1:2)
 			tmp1 = arr(1)
 			arr(1) = arr(2)
 			arr(2) = tmp1
-			write(6,*)'swapped ', arr(1:2)
+!			write(6,*)'swapped ', arr(1:2)
 		Endif		
 		
 !		Return  ! arr
