@@ -60,7 +60,8 @@ PROGRAM Main
 	CALL blacs_gridinfo ( context, nprow, npcol, myrow, mycol )
 !  write(6,*)'Grid initialization complete for processor :', iam, n_regions
   
-
+	! Reading the data should happen here, outside the region loop
+	CALL Read_All_Data()
 
 	CALL Get_Processor_Info()
 	CALL Main_Allocation()
@@ -177,6 +178,7 @@ PROGRAM Main
 		WRITE(*,'(A,F8.2,A)') '         Build Time = ', time_build/60D0, ' min'
 		WRITE(*,'(A,F8.2,A)') '     Inversion Time = ', time_invert/60D0, ' min'
 		WRITE(*,'(A,F8.2,A)') '     Stitching Time = ', (time4-time3)/60D0, ' min'
+		WRITE(*,'(A,F8.2,A)') '         Other Time = ', btime1/60D0, ' min'
 	ENDIF
 
   if (serial_inversion == 0) then

@@ -23,5 +23,6 @@ MODULE Run_Info
 	INTEGER, PUBLIC :: myid, numproc
 	! myid is the MPI process ID, iam is the BLACS process ID. they are probably
 	! the same
+	DOUBLE PRECISION :: btime0, btime1 = 0
 
 END MODULE Run_Info
