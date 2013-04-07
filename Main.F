@@ -42,7 +42,6 @@ PROGRAM Main
 	! Data_management.F
 	CALL Main_Initialization()      ! Load in the solution grid parameters and
 				  ! initialize the primary matrices
-
 	serial_inversion = 0
 
 	! Decide nprow, npcol base on numproc
@@ -62,14 +61,13 @@ PROGRAM Main
   
 	! Reading the data should happen here, outside the region loop
 	CALL Read_All_Data()
-
 	CALL Get_Processor_Info()
 	CALL Main_Allocation()
 	IF (myid == 0) WRITE(*,*) 'Computing Regularization Matrices....'
 
 	CALL Compute_Regularization_Matrices()
 	time1 = MPI_Wtime(ierr) ! end of init
-	IF (myid == 0) WRITE(*,*) 'Initialization Complete... Entering Main Loop'
+	IF (myid == 0) WRITE(*,*) 'Initialization Complete... Entering Main Loop over regions'
 	CALL Findmns()
 	DO i=1, n_regions
 		r_id = i-1

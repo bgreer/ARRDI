@@ -15,14 +15,13 @@ Module Data_Management
 	Integer*8, Allocatable, Public :: nktindex(:,:,:,:), indic(:,:), indicn(:), kxy(:,:,:), tsizes(:)
 	Integer*8, Allocatable, Public :: ki(:,:), n(:,:), tile_sizes(:)
 	CHARACTER*300, ALLOCATABLE, PUBLIC :: data_files(:)
-	INTEGER*8, ALLOCATABLE, PUBLIC :: lon_all(:,:), lat_all(:,:)
+	INTEGER*8, ALLOCATABLE, PUBLIC :: lonvals(:,:), latvals(:,:)
         Integer*8, Allocatable :: nzr_indices(:,:,:), nzc_indices(:,:,:), ilocal_indices(:,:,:), jlocal_indices(:,:,:)
 	Integer*8, Allocatable :: nznr_num(:,:), nznc_num(:,:)
 	Integer*8, Public, ALLOCATABLE :: nlon(:), nlat(:)  !  , grid_scheme
 	Integer*8, Allocatable, Private :: nvals(:,:), kvals(:,:)
-	Real*8, Allocatable, Public :: latvals(:), lonvals(:)
 	Real*8, Allocatable, Public :: uxy(:,:,:)
-	real*8, Allocatable :: lon(:), lat(:)
+	REAL*8, ALLOCATABLE :: lon(:,:), lat(:,:)
 
 	Real*8, Public :: lh, lv, deltalv, deltalh, sigma, lat_lims0(2), lon_lims0(2), max_tile_size, tsize_deg
     	Namelist /Input_Namelist/ x_block_size, y_block_size, x_block_size_a,n_regions, &
@@ -98,10 +97,10 @@ Module Data_Management
 		lats(:,:) = lats(:,:)+lat_lims(1,region_id+1)-lat_lims0(1)
 		lons_pack(:) = lons_pack(:)+lon_lims(1,region_id+1)-lon_lims0(1)
 		lons(:,:) = lons(:,:)+lon_lims(1,region_id+1)-lon_lims0(1)
-		CALL Read_Raw_Data(region_id,ts_index)
+!		CALL Read_Raw_Data(region_id,ts_index)
 
 		tsize_deg = tsizes(ts_index)/8.0
-		CALL Build_Indices(ts_index)
+		CALL Build_Indices(region_id,ts_index) ! TODO: call this once, right after read-all-data
 		CALL Build_Shift(ts_index)
 		CALL Generate_ATA_Indices(ts_index)
 
@@ -111,12 +110,12 @@ Module Data_Management
 		lons_pack(:) = lons_pack(:)-lon_lims(1,region_id+1)+lon_lims0(1)
 		lons(:,:) = lons(:,:)-lon_lims(1,region_id+1)+lon_lims0(1)
 
-		DEALLOCATE(nvals)
-		DEALLOCATE(kvals)
-		DEALLOCATE(latvals)
-		DEALLOCATE(lonvals)
-		DEALLOCATE(lon)
-		DEALLOCATE(lat)	
+!		DEALLOCATE(nvals)
+!		DEALLOCATE(kvals)
+!		DEALLOCATE(latvals)
+!		DEALLOCATE(lonvals)
+!		DEALLOCATE(lon)
+!		DEALLOCATE(lat)	
 		IF (myid == 0) WRITE(*,'(A,I3,A,I4,A,I8,A)')" Data from region ",region_id," for tilesize ",ts_index,&
 			" is loaded (ndata=", ndata(ts_index), ")."
 	END SUBROUTINE Load_Dataset
@@ -129,7 +128,8 @@ Module Data_Management
 		CHARACTER*120 :: dfile, indir, tstring
 		INTEGER*8 :: maxndata
 		INTEGER :: ii, ij, stat, ierr
-		REAL*8 :: dummy
+		REAL*8 :: fin1, fin2, fin3, fin4, fin5, fin6
+		INTEGER :: iin1, iin2
 		REAL*8, ALLOCATABLE :: lonarr(:), latarr(:)
 		REAL*8, ALLOCATABLE :: temparr(:)
 
@@ -144,7 +144,7 @@ Module Data_Management
 				stat = 0
 				OPEN(30,FILE=dfile)
 				DO WHILE (stat == 0)
-					READ(30,*,IOSTAT=stat), dummy
+					READ(30,*,IOSTAT=stat), fin1
 					ndata(ii) = ndata(ii) + 1
 				ENDDO
 				CLOSE(30)
@@ -160,27 +160,29 @@ Module Data_Management
 		ALLOCATE(uxy(4,maxndata,ntsizes))
 		ALLOCATE(nvals(maxndata,ntsizes))
 		ALLOCATE(kvals(maxndata,ntsizes))
-		ALLOCATE(lon_all(maxndata,ntsizes))
-		ALLOCATE(lat_all(maxndata,ntsizes))
+		ALLOCATE(lonvals(maxndata,ntsizes))
+		ALLOCATE(latvals(maxndata,ntsizes))
 		ALLOCATE(nlon(ntsizes))
 		ALLOCATE(nlat(ntsizes))
 		ALLOCATE(n_n(ntsizes))
 		ALLOCATE(n_k(ntsizes))
+		ALLOCATE(lon(maxndata,ntsizes))
+		ALLOCATE(lat(maxndata,ntsizes))
 
 		! go back and read the data
 		DO ii=1,ntsizes
 			IF (myid == 0) THEN
 				OPEN(30,FILE=data_files(ii))
 				DO ij=1,ndata(ii)
-					READ(30,*) dummy
-					uxy(1,ij,ii) = dummy
-					uxy(2,ij,ii) = dummy
-					uxy(3,ij,ii) = dummy
-					uxy(4,ij,ii) = dummy
-					nvals(ij,ii) = dummy
-					kvals(ij,ii) = dummy
-					lat_all(ij,ii) = dummy
-					lon_all(ij,ii) = dummy
+					READ(30,*) fin1, fin2, iin1, iin2, fin3, fin4, fin5, fin6
+					uxy(1,ij,ii) = fin3
+					uxy(2,ij,ii) = fin4
+					uxy(3,ij,ii) = fin5
+					uxy(4,ij,ii) = fin6
+					nvals(ij,ii) = iin2
+					kvals(ij,ii) = iin1
+					latvals(ij,ii) = fin2
+					lonvals(ij,ii) = fin1
 				ENDDO
 				CLOSE(30)
 			ENDIF
@@ -189,29 +191,35 @@ Module Data_Management
 			CALL MPI_Bcast(uxy, 4*maxndata*ntsizes, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
 			CALL MPI_Bcast(nvals, maxndata*ntsizes, MPI_INTEGER8, 0, MPI_COMM_WORLD, ierr)
 			CALL MPI_Bcast(kvals, maxndata*ntsizes, MPI_INTEGER8, 0, MPI_COMM_WORLD, ierr)
-			CALL MPI_Bcast(lat_all, maxndata*ntsizes, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
-			CALL MPI_Bcast(lon_all, maxndata*ntsizes, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+			CALL MPI_Bcast(latvals, maxndata*ntsizes, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
+			CALL MPI_Bcast(lonvals, maxndata*ntsizes, MPI_REAL8, 0, MPI_COMM_WORLD, ierr)
 
 			! sort lon/lat arrays to get unique elements
 			ALLOCATE(lonarr(ndata(ii)))
 			ALLOCATE(latarr(ndata(ii)))
 			ALLOCATE(temparr(ndata(ii)))
-			temparr(:) = lon_all(1:ndata(ii),ii)
+			temparr(:) = lonvals(1:ndata(ii),ii)
 			lonarr = sort_array(temparr,ndata(ii))
-			temparr(:) = lat_all(1:ndata(ii),ii)
+			temparr(:) = latvals(1:ndata(ii),ii)
 			latarr = sort_array(temparr,ndata(ii))
 			CALL find_unique(lonarr)
 			CALL find_unique(latarr)
 			nlon(ii) = SIZE(lonarr)
 			nlat(ii) = SIZE(latarr)
+			lon(1:nlon(ii),ii) = lonarr
+			lat(1:nlat(ii),ii) = latarr
 			DEALLOCATE(temparr)
 			DEALLOCATE(lonarr)
 			DEALLOCATE(latarr)
 
 			n_n(ii) = MAXVAL(nvals(:,ii))-MINVAL(nvals(:,ii))+1
 			n_k(ii) = MAXVAL(kvals(:,ii))-MINVAL(kvals(:,ii))+1
-			ALLOCATE(n(n_n(ii),ntsizes))
-			ALLOCATE(ki(n_k(ii),ntsizes))
+		ENDDO
+		
+		ALLOCATE(n(MAXVAL(n_n),ntsizes))
+		ALLOCATE(ki(MAXVAL(n_k),ntsizes))
+
+		DO ii=1,ntsizes
 			ki(1,ii) = MINVAL(kvals(:,ii))
 			DO ij = 2, n_k(ii)
 				ki(ij,ii) = ki(ij-1,ii)+1
@@ -239,23 +247,23 @@ Module Data_Management
 		WRITE(tstring,'(i10)')t_id
 		indir = 'input/'
 
-		IF (ALLOCATED(ex)) DEALLOCATE(ex)
-		IF (ALLOCATED(ey)) DEALLOCATE(ey)
-		IF (ALLOCATED(ux)) DEALLOCATE(ux)
-		IF (ALLOCATED(uy)) DEALLOCATE(uy)
-		IF (ALLOCATED(uxy)) DEALLOCATE(uxy)
+!		IF (ALLOCATED(ex)) DEALLOCATE(ex)
+!		IF (ALLOCATED(ey)) DEALLOCATE(ey)
+!		IF (ALLOCATED(ux)) DEALLOCATE(ux)
+!		IF (ALLOCATED(uy)) DEALLOCATE(uy)
+!		IF (ALLOCATED(uxy)) DEALLOCATE(uxy)
 
 		dfile = TRIM(ADJUSTL(indir))//'ex_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-		CALL Read_Ascii(ex,dfile)
+!		CALL Read_Ascii(ex,dfile)
 
 		dfile = TRIM(ADJUSTL(indir))//'ey_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-		CALL Read_Ascii(ey,dfile)
+!		CALL Read_Ascii(ey,dfile)
 
 		dfile = TRIM(ADJUSTL(indir))//'ux_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-		CALL Read_Ascii(ux,dfile)
+!		CALL Read_Ascii(ux,dfile)
 
 		dfile = TRIM(ADJUSTL(indir))//'uy_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-		CALL Read_Ascii(uy,dfile)
+!		CALL Read_Ascii(uy,dfile)
 
 !		ndata = SIZE(ux)
 !		ALLOCATE(uxy(4,ndata))
@@ -321,62 +329,62 @@ Module Data_Management
 
 
 
-  Subroutine Build_Indices(ts_index)
-	Implicit None
-	Integer*8 :: i, ii, jj, this_n, this_k, found,nmin,kmin, ts_index
-	Real*8 :: this_lat, this_lon
-	Character*120 :: file1
-	!  Builds nktindex, indicn, indic - to keep track of measurement modes and locations
-	!  nktindex(n,k,ii,jj) = i if measurement i was made at n-1, k-1, lon(ii), lat(jj)
-	!  If no measurements were made at that mode/location combination, then nktindex = 0 otherwise.
-	!  indicn(n) = 1 if a measurement was made at n-1, and = 0 otherwise.
-	!  indic(k,n) = 1 if a measurement was made at n-1, k-1, and = 0 otherwise.
-	If (Allocated(nktindex)) DeAllocate(nktindex)
-	If (Allocated(indicn)) DeAllocate(indicn)
-	If (Allocated(indic)) DeAllocate(indic)
+	! TODO: there is a segfault somewhere in here when ts_index > 1
+	SUBROUTINE Build_Indices(rid,ts_index)
+		IMPLICIT NONE
+		INTEGER*8 :: i, ii, jj, this_n, this_k, found,nmin,kmin, ts_index,rid
+		INTEGER*8 :: counter
+		REAL*8 :: this_lat, this_lon, dxdeg, dydeg, apod
+		!  Builds nktindex, indicn, indic - to keep track of measurement modes and locations
+		!  nktindex(n,k,ii,jj) = i if measurement i was made at n-1, k-1, lon(ii), lat(jj)
+		!  If no measurements were made at that mode/location combination, then nktindex = 0 otherwise.
+		!  indicn(n) = 1 if a measurement was made at n-1, and = 0 otherwise.
+		!  indic(k,n) = 1 if a measurement was made at n-1, k-1, and = 0 otherwise.
+		IF (Allocated(nktindex)) DeAllocate(nktindex)
+		IF (Allocated(indicn)) DeAllocate(indicn)
+		IF (Allocated(indic)) DeAllocate(indic)
 
+		apod = 7.5/8.0
+		dxdeg = tsizes(ts_index)*apod/16.0
+		dydeg = tsizes(ts_index)*apod/16.0
 	
-	! need to make this work for an arbitrary n_min (right now assumes 0 - which is fine) - same with k
-
-	Allocate(nktindex(n_n(ts_index),n_k(ts_index),nlat(ts_index),nlon(ts_index)))   ! note that the indices are a little out of the sensible order here - this is correct
-	Allocate(indicn(n_n(ts_index)))
-	Allocate(indic(n_k(ts_index),n_n(ts_index)))
-	nktindex(:,:,:,:) = int(-1)     
-	indicn(:) = int(0)
-	indic(:,:) = int(0)
-!	Write(6,*), 'n_n is ',n_n, n(1)
-!	Write(6,*), 'n_k is ', n_k, ki(1), maxval(ki)
-	nmin = minval(n(:,ts_index))
-	kmin = minval(ki(:,ts_index))
-	Do i = 1, ndata(1)
-		this_n = nvals(i,ts_index)-nmin
-		this_k = kvals(i,ts_index)-kmin
-		this_lat = latvals(i)
-		this_lon = lonvals(i)
-		found = 0
-!		Do ii = 1, nxsz(1)
-		Do ii = 1, nlon(ts_index)
-		    if (found .eq. 0) then
-!		    Do jj = 1, nysz(1)
-		    Do jj = 1, nlat(ts_index)
-			If ( (lon(ii) .eq. this_lon) .and. (lat(jj) .eq. this_lat) ) then
-				found = 1
-				nktindex(this_n+1,this_k+1,jj,ii) = i -1 ! see note in generate ATA indices for -1 explanation
-				indicn(this_n+1) = 1
-				indic(this_k+1,this_n+1) = 1
-			endif
-		    Enddo
-		    endif
-		Enddo
-	Enddo
-!	Write(6,*)'indic '
-!  	do i = 1, 
-!		write(6,'(6I9)')i, indic(i,:)
-!	enddo
-	file1 = 'nktindex.fits'
-!	call writefits_4dl(nktindex,file1,n_n,n_k,nlat,nlon)
-		
-  End Subroutine Build_Indices
+		! need to make this work for an arbitrary n_min (right now assumes 0 - which is fine) - same with k
+		ALLOCATE(nktindex(n_n(ts_index),n_k(ts_index),nlat(ts_index),nlon(ts_index)))   ! note that the indices are a little out of the sensible order here - this is correct
+		ALLOCATE(indicn(n_n(ts_index)))
+		ALLOCATE(indic(n_k(ts_index),n_n(ts_index)))
+		nktindex(:,:,:,:) = INT(-1)
+		indicn(:) = INT(0)
+		indic(:,:) = INT(0)
+		nmin = MINVAL(n(:,ts_index))
+		kmin = MINVAL(ki(:,ts_index))
+		counter = 0
+		DO i = 1, ndata(ts_index)
+			this_n = nvals(i,ts_index)-nmin
+			this_k = kvals(i,ts_index)-kmin
+			this_lat = latvals(i,ts_index)
+			this_lon = lonvals(i,ts_index)
+			! do the region-specific data culling here
+			! since this subroutine will be called before each
+			! region inversion
+			IF (this_lat-dydeg >= lat_lims(1,rid+1) .AND. this_lat+dydeg <= lat_lims(2,rid+1) .AND. &
+				this_lon-dxdeg >= lon_lims(1,rid+1) .AND. this_lon+dxdeg <= lon_lims(2,rid+1)) THEN
+				found = 0
+				DO ii = 1, nlon(ts_index)
+					IF (found == 0) THEN
+						DO jj = 1, nlat(ts_index)
+							IF ( (lon(ii,ts_index) == this_lon) .AND. (lat(jj,ts_index) == this_lat) ) THEN
+								found = 1
+								nktindex(this_n+1,this_k+1,jj,ii) = i -1 ! see note in generate ATA indices for -1 explanation
+								indicn(this_n+1) = 1
+								indic(this_k+1,this_n+1) = 1
+								counter = counter + 1
+							ENDIF
+						ENDDO
+					ENDIF
+				ENDDO
+			ENDIF
+		ENDDO
+	END SUBROUTINE Build_Indices
   
   Subroutine Build_Shift(ts_index)
 	! builds the kxy array that describes how each measurement's kernel should be 
@@ -395,17 +403,16 @@ Module Data_Management
 	Allocate(kxy(2,nlon(ts_index),nlat(ts_index)))
 	lon_min = lons(1,1)
 	lat_min = lats(1,1)
-
 	DO j = 1, nlat(ts_index)
 	  DO i = 1, nlon(ts_index)
-		xcen = lon(i)
-		ycen = lat(j)
+		xcen = lon(i,ts_index)
+		ycen = lat(j,ts_index)
 !		xstart = int(xcen/dlon)-(nxk-1)/2
 !		ystart = int(ycen/dlat)-(nyk-1)/2
 !		xstart = (nxk-1)/2
 !		ystart = (nyk-1)/2
-		this_lat = lat(j)
-		this_lon = lon(i)
+		this_lat = lat(j,ts_index)
+		this_lon = lon(i,ts_index)
 		xoff = int(((this_lon-lon_min)/dlon))  ! How far is the center of the measurement from the edge of the grid in pixels?
 		yoff = int((this_lat-lat_min)/dlat)  ! Shift by that much, but
 		kxy(1,i,j) = xoff-(nxk-1)/2        ! compensate for the size of the kernel tile to get the appropriate shift
@@ -476,11 +483,11 @@ Module Data_Management
 			iistart = ioffset
 			iiend = iistart+nsolz-1
 			Do i = 1, nlon(ts_index)
-				lon_min = lon(i)-radz
-				lon_max = lon(i)+radz
+				lon_min = lon(i,ts_index)-radz
+				lon_max = lon(i,ts_index)+radz
 				Do j = 1, nlat(ts_index)
-					lat_min = lat(j)-radz
-					lat_max = lat(j)+radz
+					lat_min = lat(j,ts_index)-radz
+					lat_max = lat(j,ts_index)+radz
 					do ii = iistart, iiend
 						if ( (lats_pack(ii) .ge. lat_min) .and. (lats_pack(ii) .le. lat_max) ) then
 						if ( (lons_pack(ii) .ge. lon_min) .and. (lons_pack(ii) .le. lon_max) ) then

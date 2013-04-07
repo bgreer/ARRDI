@@ -427,13 +427,7 @@ Contains
 		!	Allocate(nmeasurements
 		nmeasurements = 0
 		DO i = 1, ntsizes
-			tsize_pix = tsizes(i)
-	        WRITE(tstring,'(i10)')tsize_pix
-			dfile = 'input/ex_'//TRIM(ADJUSTL(rstring))//'_'//TRIM(ADJUSTL(tstring))
-			OPEN(10, FILE=dfile)
-			READ(10,'(I7)')ndtemp	
-			CLOSE(10)
-			nmeasurements = nmeasurements+ndtemp
+			nmeasurements = nmeasurements + ndata(i)
 		ENDDO
 		!	write(6,*)'nmeasurements', nmeasurements
 		CALL Get_Atranspose_Info()
@@ -453,17 +447,16 @@ Contains
 			! inversions
 			CALL Load_Kernels(tsize_pix) ! TODO: make this parallel
 			smeared_kers = smeared_kers*dlonlat*dlonlat
-			CALL Load_Dataset(region_id,i) ! TODO: also this
-
+			CALL Load_Dataset(region_id,i)
 			CALL Create_Nonzero_Table(i)  ! more bookeeping for parallel build of matrix
 			btime0 = MPI_Wtime(ierr)
 			CALL Augment_A_Parallel(i)   ! load the A_transpose#A and A_tranpose#data for each tilesize
 			btime1 = btime1 + MPI_Wtime(ierr) - btime0
 			! ^ takes the majority of the time
 
-			DEALLOCATE(uxy)
-			DEALLOCATE(n)
-			DEALLOCATE(ki)
+!			DEALLOCATE(uxy)
+!			DEALLOCATE(n)
+!			DEALLOCATE(ki)
 			DEALLOCATE(kxy)
 			DEALLOCATE(indic)
 			DEALLOCATE(indicn)
@@ -522,197 +515,181 @@ Contains
 		DEALLOCATE(nz_locs)
 	END SUBROUTINE Create_Nonzero_Table
 
-  Subroutine Augment_A_Parallel(ts_index)
+	SUBROUTINE Augment_A_Parallel(ts_index)
     ! Different from the original Augment A in that each processors builds a piece of
     ! each matrix - rather than a whole matrix which is then communicates.  Should allow
     ! for more memory efficiency and should help with the computation of the averaging
     ! kernel coefficients.
-    Implicit None
-    Real*8, Allocatable :: augres(:,:,:)
-    Real*8, Allocatable :: result(:,:,:)
-    Real*8, Allocatable :: spread_ker(:), temp(:)
-    Real*8, Allocatable :: slice_new(:,:)
-    Real*8 :: dx,dy,ex,ey,esqx,esqy, my_total, prod
+		IMPLICIT NONE
+		REAL*8, ALLOCATABLE :: augres(:,:,:)
+		REAL*8, ALLOCATABLE :: result(:,:,:)
+		REAL*8, ALLOCATABLE :: spread_ker(:), temp(:)
+		REAL*8, ALLOCATABLE :: slice_new(:,:)
+		REAL*8 :: dx,dy,ex,ey,esqx,esqy, my_total, prod
 
-    Integer*8 :: ii, ik, el, icn, iz, im, jm, ilat, ilon, this_j, this_i, pack_ind, ts_index
-    Integer*8 :: el_num, s_num, el_ind, nnk, this_index, aindex, iin, num, i, j, offset
-    Integer*8 :: some_i, some_j
-    Integer*8 :: nshftx, nshfty,loc_num, nstop, test, my_j, my_i, my_z, nx0, ny0, s_ind, this_ind
-    Integer*8 :: nznc, nznr
-    Integer*8, Allocatable :: spread_locs(:), nzrows(:), nzcols(:), ilocal(:), jlocal(:)
-    Character*120 :: tempfile
-    	n_lats = nlat(ts_index)   ! this is a revision to Augment_A to 
-	n_lons = nlon(ts_index)   ! make this routine mesh with the data_management routines.
-    Allocate(augres(1:nxk,1:nyk,1:nzs))  ! augres gets dimensions of kernels horizontally -
+		INTEGER*8 :: ii, ik, el, icn, iz, im, jm, ilat, ilon, this_j, this_i, pack_ind, ts_index
+		INTEGER*8 :: el_num, s_num, el_ind, nnk, this_index, aindex, iin, num, i, j, offset
+		INTEGER*8 :: some_i, some_j
+		INTEGER*8 :: nshftx, nshfty,loc_num, nstop, test, my_j, my_i, my_z, nx0, ny0, s_ind, this_ind
+		INTEGER*8 :: nznc, nznr
+		INTEGER*8, ALLOCATABLE :: spread_locs(:), nzrows(:), nzcols(:), ilocal(:), jlocal(:)
+		CHARACTER*120 :: tempfile
+		n_lats = nlat(ts_index)   ! this is a revision to Augment_A to 
+		n_lons = nlon(ts_index)   ! make this routine mesh with the data_management routines.
+		ALLOCATE(augres(1:nxk,1:nyk,1:nzs))  ! augres gets dimensions of kernels horizontally -
                                     ! not of full solution grid
-    Allocate(result(1:nxk,1:nyk,1:nzk))
-    Allocate(temp(1:nzk))
+		ALLOCATE(result(1:nxk,1:nyk,1:nzk))
+		ALLOCATE(temp(1:nzk))
 
-    nx0 = nxsz(1)
-    ny0 = nysz(1)
+		nx0 = nxsz(1)
+		ny0 = nysz(1)
 
-    do ii = 1, n_n(ts_index)
-!    do ii = 1, 1
- !   Write(6,*)'Augmenting A', ii
+		DO ii = 1, n_n(ts_index)
+			IF (indicn(ii) > 0) THEN  ! do we process this n?
+				DO ik = 1, n_k(ts_index)
+					IF (indic(ik,ii) > 0) THEN !do we process this k?
 
-      if (indicn(ii) .gt. 0) then  ! do we process this n?
-      do ik = 1, n_k(ts_index)
-!      do ik = 2, 2
- 
-     if(indic(ik,ii) .gt. 0) then !do we process this k?
-         this_index = 0       !now, find the kernel for this mode in
-         nnk = 1
-         do while (this_index .eq. 0)
-                if (nkindex(1,nnk) .eq. n(ii,ts_index) ) then
-                        if (nkindex(2,nnk) .eq. ki(ik,ts_index)) then
-                                this_index = nnk
-                        endif
-                endif
-                nnk = nnk+1
-		if (nnk .gt. nkers) then 
-			write(6,*)'Fatal Error :  kernel not found for this n k combo : ', n(ii,ts_index), ki(ik,ts_index)
-			!write(6,*)'data: ', nnk, nkers, nkindex(:,nnk)
-!			write(6,*)'nkindex = ', nkindex(1,:)
-!			write(6,*)'nkindex2= ', nkindex(2,:)
-			stop
-		endif
-         enddo
-         ! now we have identified where in the kernel array we are
-         ! loop over solution grid depths and compact the kernel onto the solution
-         ! grid in depth
-         result(:,:,:) = smeared_kers(:,:,:,this_index)
+						! first, find the kernel for this mode
+						this_index = 0
+						nnk = 1
+						DO WHILE (this_index == 0)
+							IF (nkindex(1,nnk) == n(ii,ts_index) ) THEN
+								IF (nkindex(2,nnk) == ki(ik,ts_index)) THEN
+									this_index = nnk
+								ENDIF
+							ENDIF
+							nnk = nnk+1
+							IF (nnk > nkers) THEN
+								WRITE(*,*)'Fatal Error :  kernel not found for this n k combo : ', n(ii,ts_index), ki(ik,ts_index)
+								STOP
+							ENDIF
+						ENDDO
 
-         Do  iz = 1, nzs
-            temp(:) = z_owner(iz,:)*wz(:)
-            do im = i_min, i_max
-                 do jm = j_min, j_max
-                        augres(im,jm,iz) = SUM(result(im,jm,:)*temp(:))
-                 enddo    ! jm
-            enddo      ! im
-          enddo   ! iz
-        ! The basic kernel for one n+k combination is stored in augres
-        ! at this point, augres is on the proper z solution grid,
-        ! but is still uniform in x and y.
+						! now we have identified where in the kernel array we are
+						! loop over solution grid depths and compact the kernel onto the solution
+						! grid in depth
+						result(:,:,:) = smeared_kers(:,:,:,this_index)
 
-        ! We now read this kernel into the inversion matrix and the rhs
-        ! at every location that a measurement of this n+k was made.
-         do ilat = 1, n_lats
-            do ilon = 1, n_lons
-                loc_num = ata_num(ilon,ilat)
+						DO  iz = 1, nzs
+							temp(:) = z_owner(iz,:)*wz(:)
+							DO im = i_min, i_max
+								DO jm = j_min, j_max
+									augres(im,jm,iz) = SUM(result(im,jm,:)*temp(:))
+								ENDDO    ! jm
+							ENDDO      ! im
+						ENDDO   ! iz
+						! The basic kernel for one n+k combination is stored in augres
+						! at this point, augres is on the proper z solution grid,
+						! but is still uniform in x and y.
 
-
-                allocate(spread_locs(1:loc_num))
-		allocate(spread_ker(1:nsolution))
-                spread_locs(:) = ata_indices(1:loc_num,ilon,ilat)  ! non zero locations
+						! We now read this kernel into the inversion matrix and the rhs
+						! at every location that a measurement of this n+k was made.
+						DO ilat = 1, n_lats
+							DO ilon = 1, n_lons
+								loc_num = ata_num(ilon,ilat)
+								ALLOCATE(spread_locs(1:loc_num))
+								ALLOCATE(spread_ker(1:nsolution))
+								spread_locs(:) = ata_indices(1:loc_num,ilon,ilat)  ! non zero locations
                                                                    ! of the kernel
+								! We are very concerned about where the nonzero locations are because
+								! the kernel matrix A is sparse.  The bulk of this loop is essentially
+								! bookeeping for a sparse matrix multiply.
 
-		! We are very concerned about where the nonzero locations are because
-		! the kernel matrix A is sparse.  The bulk of this loop is essentially
-		! bookeeping for a sparse matrix multiply.
+								!PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+								!  ---Parallell Modification ----
+								nznr = nznr_num(ilon,ilat)  ! number of rows in this processor that correspond to nonzero kernel locations
+								nznc = nznc_num(ilon,ilat)  ! number of columns
+								ALLOCATE(nzrows(1:nznr))    ! The nonzero rows  (indexed with respect to the big matrix - i.e. 
+								ALLOCATE(nzcols(1:nznc))    ! The nonzero columns (these rows and columns can run from 1 to nsolution)
 
-		!PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
-		!  ---Parallell Modification ----
-		nznr = nznr_num(ilon,ilat)  ! number of rows in this processor that correspond to nonzero kernel locations
-		nznc = nznc_num(ilon,ilat)  ! number of columns
-!		Write(6,*), 'nznr nznc are ', nznr, nznc
-		Allocate(nzrows(1:nznr))    ! The nonzero rows  (indexed with respect to the big matrix - i.e. 
-		Allocate(nzcols(1:nznc))    ! The nonzero columns (these rows and columns can run from 1 to nsolution)
+								ALLOCATE(ilocal(1:nznr))    ! Indices in the local, small array that correspond to the nonzero
+								ALLOCATE(jlocal(1:nznc))    ! rows and columns above
 
-		Allocate(ilocal(1:nznr))    ! Indices in the local, small array that correspond to the nonzero
-		Allocate(jlocal(1:nznc))    ! rows and columns above
+								nzrows(:) = nzr_indices(1:nznr,ilon,ilat)
+								nzcols(:) = nzc_indices(1:nznc,ilon,ilat)
+								ilocal(:) = ilocal_indices(1:nznr,ilon,ilat)
+								jlocal(:) = jlocal_indices(1:nznc,ilon,ilat)
+								!PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
 
-		nzrows(:) = nzr_indices(1:nznr,ilon,ilat)
-		nzcols(:) = nzc_indices(1:nznc,ilon,ilat)
-		ilocal(:) = ilocal_indices(1:nznr,ilon,ilat)
-		jlocal(:) = jlocal_indices(1:nznc,ilon,ilat)
-		!PPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPPP
+								aindex = nktindex(ii,ik,ilat,ilon)+1 !idl stuff starts at 0
+								IF (aindex >= 1) THEN ! we measured this mode at this locale
+									nshftx = kxy(1,ilon,ilat)  ! Shift kernel into proper place
+									nshfty = kxy(2,ilon,ilat)  ! on the uniform grid
 
-                aindex = nktindex(ii,ik,ilat,ilon)+1 !idl stuff starts at 0
-               If (aindex .ge. 1) Then ! we measured this mode at this locale
-                        nshftx = kxy(1,ilon,ilat)  ! Shift kernel into proper place
-                        nshfty = kxy(2,ilon,ilat)  ! on the uniform grid
+									! just do it here - not modular, but it's pretty unique code anyway
+									! this could be optimized further, but we'll stick to the idl format
 
-			! just do it here - not modular, but it's pretty unique code anyway
-			! this could be optimized further, but we'll stick to the idl format
+									! we need an approach suitable for fortran
+									! that ensure all of a kernel is distributed among its owners
+									! Let us build a reverse lookup table instead and iterate over the kernel points
+									! 16 deg : i_min = 1, i_max = 17   - all points
+									! 4 deg  : i_min = 7, i_max = 11   - 5 square
+									! 2 deg  : i_min = 8, i_max = 10   - 3 square
+									! indarr says : given a location on the regular grid, what indices on the nonuniform grid "own" me.
+									! weight_arr says : these indices each own me by this amount
+									spread_ker(:) = 0.0
+									offset = 0
+									DO iz = 1, nzs
+										DO my_j = j_min, j_max
+											DO my_i = i_min, i_max
+												num = num_arr(my_i+nshftx,my_j+nshfty,iz)
+												my_total = 0.0
+												DO iin = 1, num
+													this_ind = ind_arr(iin,my_i+nshftx,my_j+nshfty,iz)+1  ! index on 2d slice (with nxsz0 and nysz0 points)
+													this_j = (this_ind/nx0)   ! +1 left out because I would subtract it below anyway
+													this_i = MOD(this_ind,nx0)
+													s_ind = offset+this_i+(this_j)*nxsz(iz)
+													spread_ker(s_ind) = spread_ker(s_ind)+weight_arr(iin,my_i+nshftx,my_j+nshfty,iz)*augres(my_i,my_j,iz)
+												ENDDO
+											ENDDO
+										ENDDO
+										offset = offset+nxsz(iz)*nysz(iz)
+									ENDDO
+									!########   We have just computed spread_ker.  This is the 3-D kernel, represented in 1-D
+									!#######    on the inversion grid (it has been converted from the native
+									!#######    kernel grid using weight_arr
+									dx = uxy(1,aindex,ts_index)
+									ex = uxy(2,aindex,ts_index)
+									dy = uxy(3,aindex,ts_index)
+									ey = uxy(4,aindex,ts_index)
+									esqx = ex*ex
+									esqy = ey*ey
 
-			!we need an approach suitable for fortran
-			! that ensure all of a kernel is distributed among its owners
-			! Let us build a reverse lookup table instead and iterate over the kernel points
-			! 16 deg : i_min = 1, i_max = 17   - all points
-			! 4 deg  : i_min = 7, i_max = 11   - 5 square
-			! 2 deg  : i_min = 8, i_max = 10   - 3 square
-			! indarr says : given a location on the regular grid, what indices on the nonuniform grid "own" me.
-			! weight_arr says : these indices each own me by this amount
-			spread_ker(:) = 0.0
-			offset = 0
-			do iz = 1, nzs
-			  do my_j = j_min, j_max
-				  do my_i = i_min, i_max
-					num = num_arr(my_i+nshftx,my_j+nshfty,iz)
-					my_total = 0.0
-					do iin = 1, num
-					     this_ind = ind_arr(iin,my_i+nshftx,my_j+nshfty,iz)+1  ! index on 2d slice (with nxsz0 and nysz0 points)
-					     this_j = (this_ind/nx0)   ! +1 left out because I would subtract it below anyway
-					     this_i = MOD(this_ind,nx0)
-  					     s_ind = offset+this_i+(this_j)*nxsz(iz)
-					     spread_ker(s_ind) = spread_ker(s_ind)+weight_arr(iin,my_i+nshftx,my_j+nshfty,iz)*augres(my_i,my_j,iz)
-	
-					enddo
-				  enddo
-			  enddo
-			  offset = offset+nxsz(iz)*nysz(iz)
-			enddo
-			!########   We have just computed spread_ker.  This is the 3-D kernel, represented in 1-D
-			!#######    on the inversion grid (it has been converted from the native
-			!#######    kernel grid using weight_arr
+									erhx = erhx+1.0/esqx
+									erhy = erhy+1.0/esqy
+									erhxc = erhxc+1.0
+									erhyc = erhyc+1.0
 
-                        dx = uxy(1,aindex,1)
-                        ex = uxy(2,aindex,1)
-                        dy = uxy(3,aindex,1)
-                        ey = uxy(4,aindex,1)
-                        esqx = ex*ex
-                        esqy = ey*ey
+									! Parallel Modification.  Because we are no longer doing the entire
+									! matrix, the manner in which we load our matrices changes
+									DO my_i = 1, nznr
+										some_i = ilocal(my_i)
+										rhs_x(some_i) = rhs_x(some_i)+dx/(esqx)*spread_ker(nzrows(my_i))
+										rhs_y(some_i) = rhs_y(some_i)+dy/(esqy)*spread_ker(nzrows(my_i))
+									ENDDO
 
-			erhx = erhx+1.0/esqx
-			erhy = erhy+1.0/esqy
-			erhxc = erhxc+1.0
-			erhyc = erhyc+1.0
-
-
-			! Parallel Modification.  Because we are no longer doing the entire
-			! matrix, the manner in which we load our matrices changes
-			DO my_i = 1, nznr
-				some_i = ilocal(my_i)
-				rhs_x(some_i) = rhs_x(some_i)+dx/(esqx)*spread_ker(nzrows(my_i))
-				rhs_y(some_i) = rhs_y(some_i)+dy/(esqy)*spread_ker(nzrows(my_i))
-			EndDO
-
-			DO my_j = 1, nznc
-				DO my_i = 1, nznr
-				some_i = ilocal(my_i)
-				some_j = jlocal(my_j)
-				prod = spread_ker(nzrows(my_i))*spread_ker(nzcols(my_j))
-				atax(some_i,some_j) = atax(some_i,some_j)+prod/esqx
-				atay(some_i,some_j) = atay(some_i,some_j)+prod/esqy
-				ENDDO
-			ENDDO
-			If (next_local_column .le. my_ncola) then
-			If (my_colsa(next_local_column) .eq. next_big_column) Then
-!			If (have_column(next_column) .eq. 1) Then  !  we have this column of atranspose, so load the kernel
-				DO my_i = 1, nznr		! into that matrix as well
-					some_i = ilocal(my_i)
-					atransposex(some_i,next_local_column) = spread_ker(nzrows(my_i))/esqx
-					atransposey(some_i,next_local_column) = spread_ker(nzrows(my_i))/esqy	
-				Enddo	
-				next_local_column = next_local_column+1
-			Endif
-			endif
-			next_big_column = next_big_column+1
-			!PPPPPPPPPPPPPPPPPPPPPPPPPPP
-
-
-
-                endif
+									DO my_j = 1, nznc
+										DO my_i = 1, nznr
+											some_i = ilocal(my_i)
+											some_j = jlocal(my_j)
+											prod = spread_ker(nzrows(my_i))*spread_ker(nzcols(my_j))
+											atax(some_i,some_j) = atax(some_i,some_j)+prod/esqx
+											atay(some_i,some_j) = atay(some_i,some_j)+prod/esqy
+										ENDDO
+									ENDDO
+									IF (next_local_column <= my_ncola) THEN
+										IF (my_colsa(next_local_column) == next_big_column) THEN
+											DO my_i = 1, nznr		! into that matrix as well
+												some_i = ilocal(my_i)
+												atransposex(some_i,next_local_column) = spread_ker(nzrows(my_i))/esqx
+												atransposey(some_i,next_local_column) = spread_ker(nzrows(my_i))/esqy	
+											ENDDO
+											next_local_column = next_local_column+1
+										ENDIF
+									ENDIF
+									next_big_column = next_big_column+1
+									!PPPPPPPPPPPPPPPPPPPPPPPPPPP
+								ENDIF
 		Deallocate(nzrows)
 		Deallocate(nzcols)
 		Deallocate(ilocal)
