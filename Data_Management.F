@@ -15,7 +15,7 @@ Module Data_Management
 	Integer*8, Allocatable, Public :: nktindex(:,:,:,:), indic(:,:), indicn(:), kxy(:,:,:), tsizes(:)
 	Integer*8, Allocatable, Public :: ki(:,:), n(:,:), tile_sizes(:)
 	CHARACTER*300, ALLOCATABLE, PUBLIC :: data_files(:)
-	INTEGER*8, ALLOCATABLE, PUBLIC :: lonvals(:,:), latvals(:,:)
+	REAL*8, ALLOCATABLE, PUBLIC :: lonvals(:,:), latvals(:,:)
         Integer*8, Allocatable :: nzr_indices(:,:,:), nzc_indices(:,:,:), ilocal_indices(:,:,:), jlocal_indices(:,:,:)
 	Integer*8, Allocatable :: nznr_num(:,:), nznc_num(:,:)
 	Integer*8, Public, ALLOCATABLE :: nlon(:), nlat(:)  !  , grid_scheme
@@ -60,7 +60,7 @@ Module Data_Management
 		! then read the latitude and longitude limits
 		ALLOCATE(tile_sizes(1:mxts))
 		ALLOCATE(data_files(1:mxts))
-		run_file = 'input/main_input'
+		run_file = 'input/main_input_new'
 		region_file = 'input/region_limits'
 		OPEN(10, FILE=run_file)
 		READ(10, NML=Input_Namelist)
@@ -110,12 +110,12 @@ Module Data_Management
 		lons_pack(:) = lons_pack(:)-lon_lims(1,region_id+1)+lon_lims0(1)
 		lons(:,:) = lons(:,:)-lon_lims(1,region_id+1)+lon_lims0(1)
 
-!		DEALLOCATE(nvals)
-!		DEALLOCATE(kvals)
-!		DEALLOCATE(latvals)
-!		DEALLOCATE(lonvals)
-!		DEALLOCATE(lon)
-!		DEALLOCATE(lat)	
+		DEALLOCATE(nvals)
+		DEALLOCATE(kvals)
+		DEALLOCATE(latvals)
+		DEALLOCATE(lonvals)
+		DEALLOCATE(lon)
+		DEALLOCATE(lat)	
 		IF (myid == 0) WRITE(*,'(A,I3,A,I4,A,I8,A)')" Data from region ",region_id," for tilesize ",ts_index,&
 			" is loaded (ndata=", ndata(ts_index), ")."
 	END SUBROUTINE Load_Dataset
@@ -174,7 +174,7 @@ Module Data_Management
 			IF (myid == 0) THEN
 				OPEN(30,FILE=data_files(ii))
 				DO ij=1,ndata(ii)
-					READ(30,*) fin1, fin2, iin1, iin2, fin3, fin4, fin5, fin6
+					READ(30,'(2E15.6,2I4,4E15.6)') fin1, fin2, iin1, iin2, fin3, fin4, fin5, fin6
 					uxy(1,ij,ii) = fin3
 					uxy(2,ij,ii) = fin4
 					uxy(3,ij,ii) = fin5
@@ -333,7 +333,7 @@ Module Data_Management
 	SUBROUTINE Build_Indices(rid,ts_index)
 		IMPLICIT NONE
 		INTEGER*8 :: i, ii, jj, this_n, this_k, found,nmin,kmin, ts_index,rid
-		INTEGER*8 :: counter
+		INTEGER*8 :: counter, possible
 		REAL*8 :: this_lat, this_lon, dxdeg, dydeg, apod
 		!  Builds nktindex, indicn, indic - to keep track of measurement modes and locations
 		!  nktindex(n,k,ii,jj) = i if measurement i was made at n-1, k-1, lon(ii), lat(jj)
@@ -358,6 +358,7 @@ Module Data_Management
 		nmin = MINVAL(n(:,ts_index))
 		kmin = MINVAL(ki(:,ts_index))
 		counter = 0
+		possible = 0
 		DO i = 1, ndata(ts_index)
 			this_n = nvals(i,ts_index)-nmin
 			this_k = kvals(i,ts_index)-kmin
@@ -366,9 +367,10 @@ Module Data_Management
 			! do the region-specific data culling here
 			! since this subroutine will be called before each
 			! region inversion
-			IF (this_lat-dydeg >= lat_lims(1,rid+1) .AND. this_lat+dydeg <= lat_lims(2,rid+1) .AND. &
-				this_lon-dxdeg >= lon_lims(1,rid+1) .AND. this_lon+dxdeg <= lon_lims(2,rid+1)) THEN
+			IF (this_lat >= lat_lims(1,rid+1) .AND. this_lat <= lat_lims(2,rid+1) .AND. &
+				this_lon >= lon_lims(1,rid+1) .AND. this_lon <= lon_lims(2,rid+1)) THEN
 				found = 0
+				possible = possible + 1
 				DO ii = 1, nlon(ts_index)
 					IF (found == 0) THEN
 						DO jj = 1, nlat(ts_index)

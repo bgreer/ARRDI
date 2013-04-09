@@ -79,10 +79,12 @@ PROGRAM Main
 		rhsxy(:,1) = rhs_x(:)
 		rhsxy(:,2) = rhs_y(:)
 
+
 		DO ii = 1, my_nrow
 			rhsxyzero(my_rows(ii),1,r_id+1) = rhsxy(ii,1)
 			rhsxyzero(my_rows(ii),2,r_id+1) = rhsxy(ii,2)
 		ENDDO
+		
 
 		IF (n_regions > 1) THEN
 			CALL Add_Stitch(r_id)
@@ -116,7 +118,7 @@ PROGRAM Main
   Endif
 
   DeAllocate(nkindex)
-  
+ 
 
 	time3 = MPI_Wtime(ierr)
   ! Now iterate for max number of iterations

@@ -541,8 +541,8 @@ contains
 			   nzs = 48
 			   Allocate(zs(nzs))
 			   Allocate(deg_factor(nzs))
-	                   zs(1) = 0.0 
-					   zs(2) = 0.15
+	                   zs(1) = 0.0D0
+					   zs(2) = 0.15D0
 	                   zs(3) = 0.25
 					   zs(4) = 0.50
 	                   zs(5) = 0.75 

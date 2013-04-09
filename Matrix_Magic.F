@@ -690,27 +690,22 @@ Contains
 									next_big_column = next_big_column+1
 									!PPPPPPPPPPPPPPPPPPPPPPPPPPP
 								ENDIF
-		Deallocate(nzrows)
-		Deallocate(nzcols)
-		Deallocate(ilocal)
-		DeAllocate(jlocal)
-		Deallocate(spread_ker)
-		Deallocate(spread_locs)
-
-
-           enddo  ! ilon
-          enddo ! ilat
-        endif
-      enddo  ! ik
-      endif
-    enddo    ! ii
-
-    deallocate(result)
-    deallocate(augres)
-
-    deallocate(temp)
-   ! write(6,*)'arrays deallocated'
-  End Subroutine Augment_A_Parallel
+								DEALLOCATE(nzrows)
+								DEALLOCATE(nzcols)
+								DEALLOCATE(ilocal)
+								DEALLOCATE(jlocal)
+								DEALLOCATE(spread_ker)
+								DEALLOCATE(spread_locs)
+							ENDDO  ! ilon
+						ENDDO ! ilat
+					ENDIF
+				ENDDO  ! ik
+			ENDIF
+		ENDDO    ! ii
+		DEALLOCATE(result)
+		DEALLOCATE(augres)
+		DEALLOCATE(temp)
+	END SUBROUTINE Augment_A_Parallel
 
 
 	Subroutine Add_Stitch(r_id)
@@ -1112,8 +1107,8 @@ Subroutine Compute_Regularization_Matrices
 			!lv2 = lv + deltalv*zs(iz)
 			!lv2 = MAX(lv2,1D-5)
 !			lv2 = 13D0 * lv / (zs(iz) + 4D0)**2D0
-			lv2 = lv*exp(-zs(iz)*0.10)
-!			lv2 = lv
+!			lv2 = lv*exp(-zs(iz)*0.10)
+			lv2 = lv
 			do iy = 1, nysz(iz)
 				do ix = 1, nxsz(iz)
 !					Lz(i,ile) = 1.0/delz
@@ -1594,13 +1589,13 @@ END SUBROUTINE IncrementRegm
 !	call descinit ( descy, n, nrhs, nb, 1, 0, 0, context, my_nrow, info )
 
 
-	
-
 	 if ((myrow .eq. 0) .and. (mycol .eq. 0)) then
 		write(6,*)'Performing parallel inversion.'
 	 endif
 	! Get the inverse matrix
 	call pdgetrf( nsolution, nsolution, a, 1, 1, desca, ipiv, info )
+	! at this point, i believe a() is correct. problem lies elsewhere
+
 	!call pdpotrf( 'U', nsolution, a, 1, 1, desca, info )
 	! write(6,*)'factor info is ', info
 	lwork = -1
@@ -1627,10 +1622,12 @@ END SUBROUTINE IncrementRegm
 	!  Compute the covariance Matrix
 	! first get ata#transpose(a_inv)
 	dtemp(:,:) = 0.0
-	call PDGEMM( 'N','T', nsol, nsol,nsol, 1.0, little_ata, 1, 1, DESCLA, A, 1, 1, DESCA, 0.0, DTEMP, 1, 1, DESCD )  
+
+	call PDGEMM( 'N','T', nsol, nsol,nsol, 1.0, little_ata, 1, 1, DESCLA, A, 1, 1, DESCA, 0.0, DTEMP, 1, 1, DESCD )
 	! now get a_inv#ata#transpose(a_inv)
 	etemp(:,:) = 0.0
 	call PDGEMM( 'N','N', nsol, nsol,nsol, 1.0, a, 1, 1, DESCA, Dtemp, 1, 1, DESCD, 0.0, ETEMP, 1, 1, DESCE)
+ 	
 	! covariance matrix is stored in etemp
 	if ((myrow .eq. 0) .and. (mycol .eq. 0)) write(6,*)'...complete.'
 	if (inv_order == 0) then
