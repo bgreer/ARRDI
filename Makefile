@@ -30,7 +30,9 @@ LIBFLAGS = $(MKL_LINK) $(FITS_LINK)
 ## LIBFLAGS = $(MKL_LINKI) $(FITS_LINK)
 ## use the commented flags for debugging
 F90FLAGS = -g -traceback -CB -convert big_endian -fpp -FR -m64 -xO -msse3 -O3 -r8 -I../include 
+# one of the following flags is absolutely necessary, but I haven't figured out which one
 F90FLAGS = -convert big_endian -fpp -FR -m64 -xO -msse3 -O3 -ip -ipo -r8 -I../include
+#F90FLAGS = -convert big_endian -fpp -FR -I../include
 F90FLAGS_OMP = -openmp -convert big_endian -fpp -FR -m64 -xO -msse3 -O0 -r8 -I../include 
 
 
@@ -49,7 +51,7 @@ clean :
 Main.o: Fitslib_NF.o Run_Info.o Matrix_Magic.o Solution_Grid.o Data_Management.o Region_Info.o
 Run_Info.o:  
 Matrix_Magic.o:  Run_Info.o Fitslib_NF.o Data_Management.o Region_Info.o Solution_Grid.o Kernel_Management.o
-Solution_Grid.o:  Fitslib_NF.o Kernel_Management.o
+Solution_Grid.o:  Fitslib_NF.o Kernel_Management.o Run_Info.o
 Region_Info.o: Solution_Grid.o
 Data_Management.o: Solution_Grid.o Region_Info.o IO_Routines.o Kernel_Management.o Run_Info.o
 Kernel_Management.o: IO_Routines.o Fitslib_NF.o
